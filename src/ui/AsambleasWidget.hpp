@@ -35,6 +35,8 @@
 #include <vector>
 #include "models/Asamblea.hpp"
 #include "models/UnidadPrivada.hpp"
+#include <QRegularExpressionValidator>
+
 
 class AsambleasWidget : public QWidget {
     Q_OBJECT

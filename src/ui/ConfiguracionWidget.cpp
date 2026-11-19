@@ -201,6 +201,12 @@ void ConfiguracionWidget::setupUi() {
 
     columns->addLayout(leftCol, 1);
     columns->addWidget(rightGroup, 1);
+
+    // --- Validaciones y formateo en tiempo real ---
+    connect(m_txtNit, &QLineEdit::textChanged, this, &ConfiguracionWidget::onNitTextChanged);
+    connect(m_txtTelefono, &QLineEdit::textChanged, this, &ConfiguracionWidget::onTelefonoTextChanged);
+    connect(m_txtEmail, &QLineEdit::textChanged, this, &ConfiguracionWidget::onEmailTextChanged);   
+
     mainLayout->addLayout(columns);
 }
 
@@ -433,3 +439,158 @@ void ConfiguracionWidget::onCrearBackupClicked() {
         QMessageBox::critical(this, "Error", "No se pudo copiar el archivo de base de datos.");
     }
 }
+
+// ============================================================
+// NIT: solo números, formateo XXX.XXX.XXX-D y cálculo del DV
+// ============================================================
+
+void ConfiguracionWidget::onNitTextChanged(const QString& text) {
+    // Extraer solo dígitos
+    QString digits;
+    for (QChar c : text) {
+        if (c.isDigit()) digits += c;
+    }
+
+    // Limitar a 9 dígitos (base del NIT para persona jurídica)
+    if (digits.size() > 9) digits = digits.left(9);
+
+    // Reformatar
+    QString formatted = formatNit(digits);
+
+    // Si hay 9 dígitos, calcular y anexar el dígito de verificación
+    if (digits.size() == 9) {
+        int dv = calcularDvNit(digits);
+        formatted += "-" + QString::number(dv);
+    }
+
+    // Evitar bucle infinito al reescribir el texto
+    if (formatted != text) {
+        m_txtNit->blockSignals(true);
+        m_txtNit->setText(formatted);
+        m_txtNit->blockSignals(false);
+    }
+}
+
+QString ConfiguracionWidget::formatNit(const QString& digits) {
+    if (digits.size() <= 3) return digits;
+    if (digits.size() <= 6) return digits.left(3) + "." + digits.mid(3);
+    // 7-9 dígitos: XXX.XXX.XXX
+    QString result = digits.left(3) + "." + digits.mid(3, 3);
+    if (digits.size() > 6) result += "." + digits.mid(6);
+    return result;
+}
+
+int ConfiguracionWidget::calcularDvNit(const QString& digits) {
+    // Pesos primos de la DIAN (derecha a izquierda)
+    static const int pesos[] = {3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71};
+
+    int suma = 0;
+    int n = digits.size();
+
+    // Recorrer de derecha a izquierda
+    for (int i = 0; i < n; ++i) {
+        int digito = digits[n - 1 - i].unicode() - '0';
+        suma += digito * pesos[i];
+    }
+
+    int residuo = suma % 11;
+    if (residuo < 2) return residuo;
+    int dv = 11 - residuo;
+    return (dv == 11) ? 0 : dv;
+}
+
+
+// ============================================================
+// Teléfono: solo números, formateo según tipo (fijo/celular)
+// ============================================================
+
+void ConfiguracionWidget::onTelefonoTextChanged(const QString& text) {
+    // Extraer solo dígitos
+    QString digits;
+    for (QChar c : text) {
+        if (c.isDigit()) digits += c;
+    }
+
+    // Limitar a 10 dígitos (formato unificado Colombia desde 2021)
+    if (digits.size() > 10) digits = digits.left(10);
+
+    QString formatted = formatTelefono(digits);
+
+    if (formatted != text) {
+        m_txtTelefono->blockSignals(true);
+        m_txtTelefono->setText(formatted);
+        m_txtTelefono->blockSignals(false);
+    }
+}
+
+QString ConfiguracionWidget::formatTelefono(const QString& digits) {
+    int n = digits.size();
+
+    if (n <= 3) return digits;
+
+    // Celular: inicia con 3 → XXX XXX XXXX
+    if (n >= 10 && digits[0] == '3') {
+        return digits.left(3) + " " + digits.mid(3, 3) + " " + digits.mid(6);
+    }
+
+    // Fijo: inicia con 6 → 60X XXX XXXX
+    if (n >= 10 && digits[0] == '6') {
+        return digits.left(3) + " " + digits.mid(3, 3) + " " + digits.mid(6);
+    }
+
+    // En construcción: agrupar de 3 en 3
+    QString result;
+    for (int i = 0; i < n; ++i) {
+        if (i > 0 && i % 3 == 0) result += " ";
+        result += digits[i];
+    }
+    return result;
+}
+
+
+// ============================================================
+// Email: validación en tiempo real
+// ============================================================
+
+void ConfiguracionWidget::onEmailTextChanged(const QString& text) {
+    if (text.isEmpty()) return;
+
+    if (!validarEmail(text)) {
+        m_txtEmail->setStyleSheet("border: 2px solid #e53935;");  // rojo
+        m_txtEmail->setToolTip("Formato de correo no válido");
+    } else {
+        m_txtEmail->setStyleSheet("");
+        m_txtEmail->setToolTip("");
+    }
+}
+
+bool ConfiguracionWidget::validarEmail(const QString& email) {
+    // Reglas: local@dominio.tld
+    // - Local: letras, dígitos, . _ % + -
+    // - Dominio: letras, dígitos, . -
+    // - TLD: mínimo 2 caracteres alfabéticos
+    static const QRegularExpression re(
+        R"(^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$)"
+    );
+
+    if (!re.match(email).hasMatch()) return false;
+
+    // Verificaciones adicionales:
+    // 1. No debe tener doble punto
+    if (email.contains("..")) return false;
+
+    // 2. Local no debe iniciar ni terminar con punto
+    int atPos = email.indexOf('@');
+    QString local = email.left(atPos);
+    if (local.startsWith('.') || local.endsWith('.')) return false;
+
+    // 3. Dominio no debe iniciar ni terminar con guion o punto
+    QString domain = email.mid(atPos + 1);
+    if (domain.startsWith('.') || domain.endsWith('.') ||
+        domain.startsWith('-') || domain.endsWith('-')) return false;
+
+    // 4. Longitud máxima total: 254 caracteres (RFC 5321)
+    if (email.size() > 254) return false;
+
+    return true;
+}   

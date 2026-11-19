@@ -29,6 +29,7 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QTableWidget>
+#include <QRegularExpressionValidator>
 #include "models/UsuarioSesion.hpp"
 
 
@@ -50,6 +51,11 @@ private slots:
     void cargarHistorialTasas();
     void onTasaEACambiada(double tasaEaPct);
     void onRegistrarTasaMensualClicked();
+
+    // Para los formateos de textos.
+    void onNitTextChanged(const QString&);
+    void onTelefonoTextChanged(const QString&);
+    void onEmailTextChanged(const QString&);
 
 private:
     void setupUi();
@@ -86,4 +92,10 @@ private:
     QComboBox* m_spinOrientacionMenu = nullptr;
     QPushButton* m_btnGuardar = nullptr;
     QPushButton* m_btnBackup = nullptr;
+
+    // Para los formateos de textos.
+    QString formatNit(const QString& digits);
+    int calcularDvNit(const QString& digits);
+    QString formatTelefono(const QString& digits);
+    bool validarEmail(const QString& email);
 };
