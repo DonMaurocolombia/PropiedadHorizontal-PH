@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -41,15 +46,19 @@ int ExpenseEngine::registrarEgreso(const ComprobanteEgresoRequest& req) {
     if (req.proveedorId <= 0) {
         throw std::runtime_error("Debe seleccionar un proveedor o beneficiario.");
     }
+
     if (req.conceptoDescripcion.empty()) {
         throw std::runtime_error("La descripción o concepto del pago es obligatoria.");
     }
+
     if (req.valorBruto <= 0) {
         throw std::runtime_error("El valor bruto del gasto debe ser mayor a $0.");
     }
+
     if (req.valorRetefuente < 0 || req.valorRetefuente >= req.valorBruto) {
         throw std::runtime_error("El valor de retención en la fuente no puede ser negativo ni mayor o igual al valor bruto.");
     }
+
     if (req.valorRetefuente > 0 && req.cuentaRetefuenteCodigo.empty()) {
         throw std::runtime_error("Seleccione la cuenta PUC de retención en la fuente.");
     }
@@ -103,138 +112,144 @@ int ExpenseEngine::registrarEgreso(const ComprobanteEgresoRequest& req) {
 }
 
 std::vector<EgresoResumen> ExpenseEngine::listarEgresos() {
-    auto& db = DatabaseManager::instance().getDb();
     std::vector<EgresoResumen> lista;
 
-    SQLite::Statement query(db, R"(
-        SELECT
-            c.id,
-            c.consecutivo,
-            c.fecha,
-            t.nombre_razon_social,
-            t.numero_documento,
-            c.descripcion,
-            COALESCE((
-                SELECT p.codigo || ' - ' || p.nombre
-                FROM movimientos_contables m
-                INNER JOIN puc_cuentas p ON m.cuenta_codigo = p.codigo
-                WHERE m.comprobante_id = c.id AND m.debito > 0
-                LIMIT 1
-            ), 'Gasto General') AS cuenta_gasto,
-            COALESCE((
-                SELECT SUM(debito) FROM movimientos_contables WHERE comprobante_id = c.id
-            ), 0) AS valor_bruto,
-            COALESCE((
-                SELECT SUM(credito) FROM movimientos_contables
-                WHERE comprobante_id = c.id AND cuenta_codigo LIKE '2365%'
-            ), 0) AS valor_retencion,
-            COALESCE((
-                SELECT SUM(credito) FROM movimientos_contables
-                WHERE comprobante_id = c.id AND cuenta_codigo LIKE '11%'
-            ), 0) AS valor_neto,
-            c.estado
-        FROM comprobantes_contables c
-        INNER JOIN movimientos_contables m_ref ON m_ref.comprobante_id = c.id AND m_ref.debito > 0
-        INNER JOIN terceros t ON m_ref.tercero_id = t.id
-        WHERE c.tipo_comprobante = 'EGRESO'
-        GROUP BY c.id
-        ORDER BY c.id DESC
-    )");
+    try {
+        auto& db = DatabaseManager::instance().getDb();
+        SQLite::Statement query(db, R"(
+            SELECT
+                c.id,
+                c.consecutivo,
+                c.fecha,
+                t.nombre_razon_social,
+                t.numero_documento,
+                c.descripcion,
+                COALESCE((
+                    SELECT p.codigo || ' - ' || p.nombre
+                    FROM movimientos_contables m
+                    INNER JOIN puc_cuentas p ON m.cuenta_codigo = p.codigo
+                    WHERE m.comprobante_id = c.id AND m.debito > 0
+                    LIMIT 1
+                ), 'Gasto General') AS cuenta_gasto,
+                COALESCE((
+                    SELECT SUM(debito) FROM movimientos_contables WHERE comprobante_id = c.id
+                ), 0) AS valor_bruto,
+                COALESCE((
+                    SELECT SUM(credito) FROM movimientos_contables
+                    WHERE comprobante_id = c.id AND cuenta_codigo LIKE '2365%'
+                ), 0) AS valor_retencion,
+                COALESCE((
+                    SELECT SUM(credito) FROM movimientos_contables
+                    WHERE comprobante_id = c.id AND cuenta_codigo LIKE '11%'
+                ), 0) AS valor_neto,
+                c.estado
+            FROM comprobantes_contables c
+            INNER JOIN movimientos_contables m_ref ON m_ref.comprobante_id = c.id AND m_ref.debito > 0
+            INNER JOIN terceros t ON m_ref.tercero_id = t.id
+            WHERE c.tipo_comprobante = 'EGRESO'
+            GROUP BY c.id
+            ORDER BY c.id DESC
+        )");
 
-    while (query.executeStep()) {
-        lista.push_back({
-            query.getColumn(0).getInt(),
-            query.getColumn(1).getInt(),
-            query.getColumn(2).getString(),
-            query.getColumn(3).getString(),
-            query.getColumn(4).getString(),
-            query.getColumn(5).getString(),
-            query.getColumn(6).getString(),
-            query.getColumn(7).getInt64(),
-            query.getColumn(8).getInt64(),
-            query.getColumn(9).getInt64(),
-            query.getColumn(10).getString()
-        });
+        while (query.executeStep()) {
+            lista.push_back({
+                query.getColumn(0).getInt(),
+                query.getColumn(1).getInt(),
+                query.getColumn(2).getString(),
+                query.getColumn(3).getString(),
+                query.getColumn(4).getString(),
+                query.getColumn(5).getString(),
+                query.getColumn(6).getString(),
+                query.getColumn(7).getInt64(),
+                query.getColumn(8).getInt64(),
+                query.getColumn(9).getInt64(),
+                query.getColumn(10).getString()
+            });
+        }
+    } catch (const SQLite::Exception& e) {
+       qCritical() << "Error al listar egresos: " << e.what();
     }
 
     return lista;
 }
 
 void ExpenseEngine::exportarComprobanteEgresoPDF(int comprobanteId, const std::string& rutaPdf) {
-    auto& db = DatabaseManager::instance().getDb();
-
     QString razonSocial = "CONJUNTO RESIDENCIAL PH";
     QString nitCopropiedad = "900.000.000-1";
     QString repLegal = "Administrador(a)";
     QString contador = "Contador(a) Público";
+    QString fecha, descripcion, estado, beneficiarioNombre, beneficiarioDoc, filasAsiento;
+    int64_t totalDeb = 0, totalCred = 0, netoGirado = 0, consecutivo = 0;
 
-    SQLite::Statement cfg(db, R"(
-        SELECT razon_social, nit, representante_legal,
-               COALESCE(contador_nombre, 'Contador(a) Público')
-        FROM copropiedad_config WHERE id = 1
-    )");
-    if (cfg.executeStep()) {
-        razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
-        nitCopropiedad = QString::fromStdString(cfg.getColumn(1).getString());
-        repLegal = QString::fromStdString(cfg.getColumn(2).getString());
-        contador = QString::fromStdString(cfg.getColumn(3).getString());
-    }
+    try {
+        auto& db = DatabaseManager::instance().getDb();
 
-    SQLite::Statement compStmt(db, R"(
-        SELECT consecutivo, fecha, descripcion, estado
-        FROM comprobantes_contables
-        WHERE id = ? AND tipo_comprobante = 'EGRESO'
-    )");
-    compStmt.bind(1, comprobanteId);
-    if (!compStmt.executeStep()) {
-        throw std::runtime_error("Comprobante de egreso no encontrado.");
-    }
-
-    int consecutivo = compStmt.getColumn(0).getInt();
-    QString fecha = QString::fromStdString(compStmt.getColumn(1).getString());
-    QString descripcion = QString::fromStdString(compStmt.getColumn(2).getString());
-    QString estado = QString::fromStdString(compStmt.getColumn(3).getString());
-
-    // Obtener líneas contables del egreso y datos del beneficiario
-    SQLite::Statement movStmt(db, R"(
-        SELECT m.cuenta_codigo, p.nombre, t.nombre_razon_social, t.tipo_documento, t.numero_documento,
-               m.debito, m.credito
-        FROM movimientos_contables m
-        INNER JOIN puc_cuentas p ON m.cuenta_codigo = p.codigo
-        INNER JOIN terceros t ON m.tercero_id = t.id
-        WHERE m.comprobante_id = ?
-        ORDER BY m.id ASC
-    )");
-    movStmt.bind(1, comprobanteId);
-
-    QString beneficiarioNombre, beneficiarioDoc;
-    QString filasAsiento;
-    int64_t totalDeb = 0, totalCred = 0, netoGirado = 0;
-
-    while (movStmt.executeStep()) {
-        QString cta = QString::fromStdString(movStmt.getColumn(0).getString());
-        QString ctaNombre = QString::fromStdString(movStmt.getColumn(1).getString());
-        if (beneficiarioNombre.isEmpty()) {
-            beneficiarioNombre = QString::fromStdString(movStmt.getColumn(2).getString());
-            beneficiarioDoc = QString::fromStdString(movStmt.getColumn(3).getString() + " " + movStmt.getColumn(4).getString());
-        }
-        int64_t deb = movStmt.getColumn(5).getInt64();
-        int64_t cred = movStmt.getColumn(6).getInt64();
-
-        totalDeb += deb;
-        totalCred += cred;
-        if (cta.startsWith("11") && cred > 0) {
-            netoGirado += cred;
+        SQLite::Statement cfg(db, R"(
+            SELECT razon_social, nit, representante_legal,
+                COALESCE(contador_nombre, 'Contador(a) Público')
+            FROM copropiedad_config WHERE id = 1
+        )");
+        if (cfg.executeStep()) {
+            razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
+            nitCopropiedad = QString::fromStdString(cfg.getColumn(1).getString());
+            repLegal = QString::fromStdString(cfg.getColumn(2).getString());
+            contador = QString::fromStdString(cfg.getColumn(3).getString());
         }
 
-        filasAsiento += QString(R"(
-            <tr>
-                <td style="padding: 6px; border-bottom: 1px solid #ddd;">%1</td>
-                <td style="padding: 6px; border-bottom: 1px solid #ddd;">%2</td>
-                <td style="padding: 6px; border-bottom: 1px solid #ddd; text-align: right;">%3</td>
-                <td style="padding: 6px; border-bottom: 1px solid #ddd; text-align: right;">%4</td>
-            </tr>
-        )").arg(cta, ctaNombre, fmtPesos(deb), fmtPesos(cred));
+        SQLite::Statement compStmt(db, R"(
+            SELECT consecutivo, fecha, descripcion, estado
+            FROM comprobantes_contables
+            WHERE id = ? AND tipo_comprobante = 'EGRESO'
+        )");
+        compStmt.bind(1, comprobanteId);
+        if (!compStmt.executeStep()) {
+            throw std::runtime_error("Comprobante de egreso no encontrado.");
+        }
+
+        consecutivo = compStmt.getColumn(0).getInt();
+        fecha = QString::fromStdString(compStmt.getColumn(1).getString());
+        descripcion = QString::fromStdString(compStmt.getColumn(2).getString());
+        estado = QString::fromStdString(compStmt.getColumn(3).getString());
+
+        // Obtener líneas contables del egreso y datos del beneficiario
+        SQLite::Statement movStmt(db, R"(
+            SELECT m.cuenta_codigo, p.nombre, t.nombre_razon_social, t.tipo_documento, t.numero_documento,
+                m.debito, m.credito
+            FROM movimientos_contables m
+            INNER JOIN puc_cuentas p ON m.cuenta_codigo = p.codigo
+            INNER JOIN terceros t ON m.tercero_id = t.id
+            WHERE m.comprobante_id = ?
+            ORDER BY m.id ASC
+        )");
+        movStmt.bind(1, comprobanteId);
+
+        while (movStmt.executeStep()) {
+            QString cta = QString::fromStdString(movStmt.getColumn(0).getString());
+            QString ctaNombre = QString::fromStdString(movStmt.getColumn(1).getString());
+            if (beneficiarioNombre.isEmpty()) {
+                beneficiarioNombre = QString::fromStdString(movStmt.getColumn(2).getString());
+                beneficiarioDoc = QString::fromStdString(movStmt.getColumn(3).getString() + " " + movStmt.getColumn(4).getString());
+            }
+            int64_t deb = movStmt.getColumn(5).getInt64();
+            int64_t cred = movStmt.getColumn(6).getInt64();
+
+            totalDeb += deb;
+            totalCred += cred;
+            if (cta.startsWith("11") && cred > 0) {
+                netoGirado += cred;
+            }
+
+            filasAsiento += QString(R"(
+                <tr>
+                    <td style="padding: 6px; border-bottom: 1px solid #ddd;">%1</td>
+                    <td style="padding: 6px; border-bottom: 1px solid #ddd;">%2</td>
+                    <td style="padding: 6px; border-bottom: 1px solid #ddd; text-align: right;">%3</td>
+                    <td style="padding: 6px; border-bottom: 1px solid #ddd; text-align: right;">%4</td>
+                </tr>
+            )").arg(cta, ctaNombre, fmtPesos(deb), fmtPesos(cred));
+        }
+    } catch (const SQLite::Exception& e) {
+       qCritical() << "Error al exportar el comprobante de egreso en PDF: " << e.what();
     }
 
     QString html = QString(R"(
@@ -286,6 +301,8 @@ void ExpenseEngine::exportarComprobanteEgresoPDF(int comprobanteId, const std::s
             _________________________
             Firma y Sello / C.C.
             Recibí Conforme
+        </body>
+        </html>
     )")
         .arg(razonSocial, nitCopropiedad)
         .arg(QString("%1").arg(consecutivo, 5, 10, QChar('0')))

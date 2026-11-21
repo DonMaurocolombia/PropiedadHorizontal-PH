@@ -1,3 +1,27 @@
+#   SPDX-FileCopyrightText: 2026 Oscar Mauricio Bonil P.
+#
+#   SPDX-License-Identifier: GPL-3.0-or-later
+#
+#   Administrador - PH: Administrador PH busca facilitar y organizar la 
+#   administración de copropiedades mediante una plataforma que centralice 
+#   la información, los documentos y los procesos administrativos, bajo la 
+#   Licencia GPL-3.0-or-later.
+#   
+#   Copyright (C) 2026 Oscar Mauricio Bonil P.
+#
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 cmake_minimum_required(VERSION 3.21)
 
 project(PropiedadHorizontalPH VERSION 1.0.0 LANGUAGES CXX)
@@ -45,6 +69,10 @@ set(PROJECT_SOURCES
     src/core/ParqueaderoRepository.cpp
     src/core/BillingEngine.hpp
     src/core/BillingEngine.cpp
+    src/core/ConceptosCobroRepository.hpp
+    src/core/ConceptosCobroRepository.cpp
+    src/core/FacturasServicioEngine.hpp
+    src/core/FacturasServicioEngine.cpp
     src/core/CollectionEngine.hpp
     src/core/CollectionEngine.cpp
     src/core/ExpenseEngine.hpp
@@ -81,6 +109,10 @@ set(PROJECT_SOURCES
     src/ui/ParqueaderosWidget.cpp
     src/ui/FacturacionWidget.hpp
     src/ui/FacturacionWidget.cpp
+    src/ui/FacturasServicioWidget.hpp
+    src/ui/FacturasServicioWidget.cpp
+    src/ui/ConceptosCobroWidget.hpp
+    src/ui/ConceptosCobroWidget.cpp
     src/ui/RecaudoWidget.hpp
     src/ui/RecaudoWidget.cpp
     src/ui/EgresosWidget.hpp

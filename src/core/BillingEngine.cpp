@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -24,350 +29,448 @@
 #include "DbManager.hpp"
 #include "AccountingEngine.hpp"
 #include <SQLiteCpp/SQLiteCpp.h>
+#include <QDebug>
 #include <stdexcept>
 #include <cmath>
 #include <format>
+#include <limits>
+#include <unordered_set>
 
-int BillingEngine::generarFacturacionMensual(const std::string& periodo,
-                                             int64_t presupuestoMensualBase,
-                                             const std::string& fechaEmision,
-                                             const std::string& fechaVencimiento,
-                                             int usuarioId) {
+int BillingEngine::generarFacturacionMensual(
+    const std::string& periodo, int64_t presupuestoMensualBase, const std::string& fechaEmision,
+    const std::string& fechaVencimiento, int usuarioId
+) {
     if (periodo.size() != 7 || periodo[4] != '-') {
         throw std::runtime_error("El periodo debe tener formato YYYY-MM (ej. 2026-11).");
     }
+
     if (presupuestoMensualBase <= 0) {
         throw std::runtime_error("El presupuesto mensual base debe ser mayor a cero.");
     }
 
-    auto& db = DatabaseManager::instance().getDb();
-
-    // 1. Verificar que no exista ya facturación generada para este periodo
-    SQLite::Statement checkPeriodo(db, "SELECT COUNT(*) FROM cuentas_cobro WHERE periodo = ? AND estado != 'ANULADA'");
-    checkPeriodo.bind(1, periodo);
-    checkPeriodo.executeStep();
-    if (checkPeriodo.getColumn(0).getInt() > 0) {
-        throw std::runtime_error("Ya existen cuentas de cobro generadas para el periodo " + periodo + ".");
-    }
-
-    // 2. Obtener tasa de mora de la configuración de la copropiedad
-    double tasaMoraMensual = 0.018;
-    int diaDescuento = 10;
-    double pctDescuento = 0.0;
-
-    SQLite::Statement cfgStmt(db, R"(
-        SELECT tasa_mora_mensual, dia_limite_pronto_pago, porcentaje_descuento_pronto_pago
-        FROM copropiedad_config WHERE id = 1
-    )");
-    if (cfgStmt.executeStep()) {
-        tasaMoraMensual = cfgStmt.getColumn(0).getDouble();
-        diaDescuento = cfgStmt.getColumn(1).getInt();
-        pctDescuento = cfgStmt.getColumn(2).getDouble();
-    }
-
-    // 3. Cargar IDs y cuentas PUC de los conceptos de cobro base
-    struct ConceptoInfo {
-        int id;
-        std::string nombre;
-        std::string cuentaIngreso;
-        std::string cuentaCartera;
-        bool aplicaIva;
-        double pctIva;
-    };
-
-    auto cargarConcepto = [&](const std::string& codigo) -> ConceptoInfo {
-        SQLite::Statement q(db, R"(
-            SELECT id, nombre, cuenta_ingreso_codigo, cuenta_cartera_codigo, aplica_iva, porcentaje_iva
-            FROM conceptos_cobro WHERE codigo = ?
-        )");
-        q.bind(1, codigo);
-        if (!q.executeStep()) {
-            throw std::runtime_error("Falta configurar el concepto de cobro: " + codigo);
-        }
-        return {
-            q.getColumn(0).getInt(),
-            q.getColumn(1).getString(),
-            q.getColumn(2).getString(),
-            q.getColumn(3).getString(),
-            q.getColumn(4).getInt() == 1,
-            q.getColumn(5).getDouble()
-        };
-    };
-
-    ConceptoInfo cCuotaOrd = cargarConcepto("CUOTA_ORD");
-    ConceptoInfo cMora     = cargarConcepto("MORA");
-    ConceptoInfo cParqAlq  = cargarConcepto("PARQ_ALQ");
-
-    // 4. Obtener todas las unidades ACTIVAS
-    SQLite::Statement unidadesStmt(db, R"(
-        SELECT id, nomenclatura, coeficiente, propietario_principal_id, inquilino_actual_id, enviar_cobro_a
-        FROM unidades_privadas
-        WHERE estado = 'ACTIVA'
-        ORDER BY id ASC
-    )");
-
-    std::string periodoCompacto = periodo.substr(0, 4) + periodo.substr(5, 2); // Ej: "202611"
-    std::string fechaLimiteDesc = std::format("{}-{:02d}", periodo, diaDescuento);
-
     int cuentasGeneradas = 0;
+    try {
+        auto& db = DatabaseManager::instance().getDb();
 
-    // Transacción global para todo el lote de facturación
-    SQLite::Transaction transaction(db);
-
-    while (unidadesStmt.executeStep()) {
-        int unidadId = unidadesStmt.getColumn(0).getInt();
-        std::string nomenclatura = unidadesStmt.getColumn(1).getString();
-        double coeficiente = unidadesStmt.getColumn(2).getDouble();
-        int propietarioId = unidadesStmt.getColumn(3).getInt();
-        int terceroCobroId = propietarioId;
-
-        std::string enviarA = unidadesStmt.getColumn(5).getString();
-        if (enviarA == "INQUILINO" && !unidadesStmt.getColumn(4).isNull()) {
-            terceroCobroId = unidadesStmt.getColumn(4).getInt();
+        // 1. Verificar que no exista ya facturación generada para este periodo
+        SQLite::Statement checkPeriodo(db, "SELECT COUNT(*) FROM cuentas_cobro WHERE periodo = ? AND estado != 'ANULADA'");
+        checkPeriodo.bind(1, periodo);
+        checkPeriodo.executeStep();
+        if (checkPeriodo.getColumn(0).getInt() > 0) {
+            throw std::runtime_error("Ya existen cuentas de cobro generadas para el periodo " + periodo + ".");
         }
 
-        // A. Consultar saldo anterior pendiente de la unidad
-        SQLite::Statement saldoStmt(db, R"(
-            SELECT COALESCE(SUM(saldo_pendiente), 0)
-            FROM cuentas_cobro
-            WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
+        // 2. Obtener tasa de mora de la configuración de la copropiedad
+        double tasaMoraMensual = 0.018;
+        int diaDescuento = 10;
+        double pctDescuento = 0.0;
+
+        SQLite::Statement cfgStmt(db, R"(
+            SELECT tasa_mora_mensual, dia_limite_pronto_pago, porcentaje_descuento_pronto_pago
+            FROM copropiedad_config WHERE id = 1
         )");
-        saldoStmt.bind(1, unidadId);
-        saldoStmt.executeStep();
-        int64_t saldoAnterior = saldoStmt.getColumn(0).getInt64();
-
-        // B. Consultar capital vencido que genera interés de mora
-        SQLite::Statement baseMoraStmt(db, R"(
-            SELECT COALESCE(SUM(d.saldo_concepto), 0)
-            FROM cuentas_cobro_detalle d
-            INNER JOIN cuentas_cobro c ON d.cuenta_cobro_id = c.id
-            INNER JOIN conceptos_cobro con ON d.concepto_id = con.id
-            WHERE c.unidad_id = ?
-              AND c.estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
-              AND con.genera_interes_mora = 1
-        )");
-        baseMoraStmt.bind(1, unidadId);
-        baseMoraStmt.executeStep();
-        int64_t capitalVencido = baseMoraStmt.getColumn(0).getInt64();
-
-        // C. Calcular valores del periodo
-        int64_t valorCuotaOrd = std::llround(presupuestoMensualBase * coeficiente);
-        int64_t valorMora = (capitalVencido > 0) ? std::llround(capitalVencido * tasaMoraMensual) : 0;
-
-        // D. Verificar parqueaderos o bodegas comunes en alquiler asignados a esta unidad
-        SQLite::Statement alqStmt(db, R"(
-            SELECT COALESCE(SUM(canon_mensual), 0)
-            FROM parqueaderos
-            WHERE unidad_asignada_id = ? AND tipo_tenencia = 'COMUN_ALQUILER'
-        )");
-        alqStmt.bind(1, unidadId);
-        alqStmt.executeStep();
-        int64_t valorAlquilerParq = alqStmt.getColumn(0).getInt64();
-        int64_t ivaAlquilerParq = cParqAlq.aplicaIva
-            ? std::llround(valorAlquilerParq * (cParqAlq.pctIva / 100.0))
-            : 0;
-
-        int64_t valorPeriodo = valorCuotaOrd + valorMora + valorAlquilerParq + ivaAlquilerParq;
-        int64_t totalAPagar = saldoAnterior + valorPeriodo;
-        int64_t descuentoProntoPago = (pctDescuento > 0.0)
-            ? std::llround(valorCuotaOrd * (pctDescuento / 100.0))
-            : 0;
-
-        cuentasGeneradas++;
-        std::string numDoc = std::format("CC-{}-{:04d}", periodoCompacto, cuentasGeneradas);
-
-        // E. Construir comprobante contable automático (Partida Doble)
-        ComprobanteRequest compReq;
-        compReq.tipoComprobante = "FACTURACION";
-        compReq.fecha = fechaEmision;
-        compReq.descripcion = std::format("Causación Cuenta Cobro {} - {} ({})", numDoc, nomenclatura, periodo);
-        compReq.usuarioId = usuarioId;
-
-        // Débito Cartera 130505 / Crédito Ingreso 417005 (Cuota Ordinaria)
-        if (valorCuotaOrd > 0) {
-            compReq.movimientos.push_back({cCuotaOrd.cuentaCartera, terceroCobroId, unidadId, "Cuota Ord. " + periodo, valorCuotaOrd, 0});
-            compReq.movimientos.push_back({cCuotaOrd.cuentaIngreso, terceroCobroId, unidadId, "Ingreso Cuota Ord. " + periodo, 0, valorCuotaOrd});
-        }
-        // Débito Cartera 130515 / Crédito Ingreso 417015 (Intereses Mora)
-        if (valorMora > 0) {
-            compReq.movimientos.push_back({cMora.cuentaCartera, terceroCobroId, unidadId, "Intereses Mora " + periodo, valorMora, 0});
-            compReq.movimientos.push_back({cMora.cuentaIngreso, terceroCobroId, unidadId, "Ingreso Mora " + periodo, 0, valorMora});
-        }
-        // Débito Cartera 130525 / Crédito Ingreso 417025 (Alquiler Parqueadero)
-        if (valorAlquilerParq > 0) {
-            int64_t totalAlq = valorAlquilerParq + ivaAlquilerParq;
-            compReq.movimientos.push_back({cParqAlq.cuentaCartera, terceroCobroId, unidadId, "Alquiler Parqueadero " + periodo, totalAlq, 0});
-            compReq.movimientos.push_back({cParqAlq.cuentaIngreso, terceroCobroId, unidadId, "Ingreso Alquiler Parq. " + periodo, 0, totalAlq});
+        if (cfgStmt.executeStep()) {
+            tasaMoraMensual = cfgStmt.getColumn(0).getDouble();
+            diaDescuento = cfgStmt.getColumn(1).getInt();
+            pctDescuento = cfgStmt.getColumn(2).getDouble();
         }
 
-        int comprobanteId = AccountingEngine::registrarComprobante(compReq);
-
-        // F. Marcar cuentas anteriores como VENCIDAS si tenían saldo pendiente
-        SQLite::Statement vencStmt(db, R"(
-            UPDATE cuentas_cobro
-            SET estado = 'VENCIDA'
-            WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL')
-        )");
-        vencStmt.bind(1, unidadId);
-        vencStmt.exec();
-
-        // G. Insertar encabezado de Cuenta de Cobro
-        SQLite::Statement insertCC(db, R"(
-            INSERT INTO cuentas_cobro (
-                numero_documento, unidad_id, tercero_id, periodo,
-                fecha_emision, fecha_vencimiento, fecha_limite_descuento,
-                saldo_anterior, valor_periodo, valor_descuento_pronto_pago,
-                total_a_pagar, saldo_pendiente, estado, comprobante_contable_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?)
-        )");
-
-        insertCC.bind(1, numDoc);
-        insertCC.bind(2, unidadId);
-        insertCC.bind(3, terceroCobroId);
-        insertCC.bind(4, periodo);
-        insertCC.bind(5, fechaEmision);
-        insertCC.bind(6, fechaVencimiento);
-        insertCC.bind(7, fechaLimiteDesc);
-        insertCC.bind(8,  static_cast<int64_t>(saldoAnterior));
-        insertCC.bind(9,  static_cast<int64_t>(valorPeriodo));
-        insertCC.bind(10, static_cast<int64_t>(descuentoProntoPago));
-        insertCC.bind(11, static_cast<int64_t>(totalAPagar));
-        insertCC.bind(12, static_cast<int64_t>(valorPeriodo)); // Saldo propio de esta factura
-        insertCC.bind(13, comprobanteId);
-        insertCC.exec();
-
-        int cuentaCobroId = static_cast<int>(db.getLastInsertRowid());
-
-        // H. Insertar líneas de detalle
-        SQLite::Statement insertDet(db, R"(
-            INSERT INTO cuentas_cobro_detalle (
-            cuenta_cobro_id, concepto_id, descripcion, valor, iva, saldo_concepto
-            ) VALUES (?, ?, ?, ?, ?, ?)
-        )");
-
-        auto agregarDetalle = [&](int conceptoId, const std::string& desc, int64_t val, int64_t iva) {
-            if (val <= 0) return;
-
-            insertDet.bind(1, cuentaCobroId);
-            insertDet.bind(2, conceptoId);
-            insertDet.bind(3, desc);
-            insertDet.bind(4, static_cast<int64_t>(val));
-            insertDet.bind(5, static_cast<int64_t>(iva));
-            insertDet.bind(6, static_cast<int64_t>(val + iva));
-            insertDet.exec();
-            insertDet.reset();
+        // 3. Cargar IDs y cuentas PUC de los conceptos de cobro base
+        struct ConceptoInfo {
+            int id;
+            std::string nombre;
+            std::string cuentaIngreso;
+            std::string cuentaCartera;
+            bool aplicaIva;
+            double pctIva;
         };
 
-        agregarDetalle(cCuotaOrd.id, "Cuota Ordinaria de Administración (" + periodo + ")", valorCuotaOrd, 0);
-        agregarDetalle(cMora.id, "Intereses de Mora sobre Capital Vencido", valorMora, 0);
-        agregarDetalle(cParqAlq.id, "Alquiler Parqueadero Común (" + periodo + ")", valorAlquilerParq, ivaAlquilerParq);
+        struct CargoServicioPendiente {
+            int facturaId;
+            int conceptoId;
+            std::string conceptoNombre;
+            std::string cuentaIngreso;
+            std::string cuentaCartera;
+            std::string descripcion;
+            int64_t valor;
+        };
+
+        auto cargarConcepto = [&](const std::string& codigo) -> ConceptoInfo {
+            SQLite::Statement q(db, R"(
+                SELECT id, nombre, cuenta_ingreso_codigo, cuenta_cartera_codigo, aplica_iva, porcentaje_iva
+                FROM conceptos_cobro WHERE codigo = ?
+            )");
+            q.bind(1, codigo);
+            if (!q.executeStep()) {
+                throw std::runtime_error("Falta configurar el concepto de cobro: " + codigo);
+            }
+            return {
+                q.getColumn(0).getInt(),
+                q.getColumn(1).getString(),
+                q.getColumn(2).getString(),
+                q.getColumn(3).getString(),
+                q.getColumn(4).getInt() == 1,
+                q.getColumn(5).getDouble()
+            };
+        };
+
+        ConceptoInfo cCuotaOrd = cargarConcepto("CUOTA_ORD");
+        ConceptoInfo cMora     = cargarConcepto("MORA");
+        ConceptoInfo cParqAlq  = cargarConcepto("PARQ_ALQ");
+
+        // 4. Obtener todas las unidades ACTIVAS
+        SQLite::Statement unidadesStmt(db, R"(
+            SELECT id, nomenclatura, coeficiente, propietario_principal_id, inquilino_actual_id, enviar_cobro_a
+            FROM unidades_privadas
+            WHERE estado = 'ACTIVA'
+            ORDER BY id ASC
+        )");
+
+        std::string periodoCompacto = periodo.substr(0, 4) + periodo.substr(5, 2); // Ej: "202611"
+        std::string fechaLimiteDesc = std::format("{}-{:02d}", periodo, diaDescuento);
+
+        // Transacción global para todo el lote de facturación
+        SQLite::Transaction transaction(db);
+
+        while (unidadesStmt.executeStep()) {
+            int unidadId = unidadesStmt.getColumn(0).getInt();
+            std::string nomenclatura = unidadesStmt.getColumn(1).getString();
+            double coeficiente = unidadesStmt.getColumn(2).getDouble();
+            int propietarioId = unidadesStmt.getColumn(3).getInt();
+            int terceroCobroId = propietarioId;
+
+            std::string enviarA = unidadesStmt.getColumn(5).getString();
+            if (enviarA == "INQUILINO" && !unidadesStmt.getColumn(4).isNull()) {
+                terceroCobroId = unidadesStmt.getColumn(4).getInt();
+            }
+
+            // A. Consultar saldo anterior pendiente de la unidad
+            SQLite::Statement saldoStmt(db, R"(
+                SELECT COALESCE(SUM(saldo_pendiente), 0)
+                FROM cuentas_cobro
+                WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
+            )");
+            saldoStmt.bind(1, unidadId);
+            saldoStmt.executeStep();
+            int64_t saldoAnterior = saldoStmt.getColumn(0).getInt64();
+
+            // B. Consultar capital vencido que genera interés de mora
+            SQLite::Statement baseMoraStmt(db, R"(
+                SELECT COALESCE(SUM(d.saldo_concepto), 0)
+                FROM cuentas_cobro_detalle d
+                INNER JOIN cuentas_cobro c ON d.cuenta_cobro_id = c.id
+                INNER JOIN conceptos_cobro con ON d.concepto_id = con.id
+                WHERE c.unidad_id = ?
+                AND c.estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
+                AND con.genera_interes_mora = 1
+            )");
+            baseMoraStmt.bind(1, unidadId);
+            baseMoraStmt.executeStep();
+            int64_t capitalVencido = baseMoraStmt.getColumn(0).getInt64();
+
+            // C. Calcular valores del periodo
+            int64_t valorCuotaOrd = std::llround(presupuestoMensualBase * coeficiente);
+            int64_t valorMora = (capitalVencido > 0) ? std::llround(capitalVencido * tasaMoraMensual) : 0;
+
+            // D. Verificar parqueaderos o bodegas comunes en alquiler asignados a esta unidad
+            SQLite::Statement alqStmt(db, R"(
+                SELECT COALESCE(SUM(canon_mensual), 0)
+                FROM parqueaderos
+                WHERE unidad_asignada_id = ? AND tipo_tenencia = 'COMUN_ALQUILER'
+            )");
+            alqStmt.bind(1, unidadId);
+            alqStmt.executeStep();
+            int64_t valorAlquilerParq = alqStmt.getColumn(0).getInt64();
+            int64_t ivaAlquilerParq = cParqAlq.aplicaIva
+                ? std::llround(valorAlquilerParq * (cParqAlq.pctIva / 100.0))
+                : 0;
+
+            std::vector<CargoServicioPendiente> cargosServicio;
+            int64_t valorCargosServicio = 0;
+            SQLite::Statement cargosStmt(db, R"(
+                SELECT f.id, con.id, con.nombre,
+                       con.cuenta_ingreso_codigo, con.cuenta_cartera_codigo,
+                       d.descripcion, d.valor_base_cop
+                FROM facturas_servicio_cobro fc
+                INNER JOIN facturas_servicio f ON f.id = fc.factura_id
+                INNER JOIN facturas_servicio_contexto ctx
+                    ON ctx.factura_id = f.id
+                INNER JOIN conceptos_cobro con ON con.id = fc.concepto_id
+                INNER JOIN facturas_servicio_detalle d
+                    ON d.factura_id = f.id
+                WHERE ctx.unidad_visitada_id = ?
+                  AND fc.estado = 'POR_COBRAR_UNIDAD'
+                  AND con.tipo_concepto = 'SERVICIO'
+                ORDER BY f.id, d.id
+            )");
+            cargosStmt.bind(1, unidadId);
+            while (cargosStmt.executeStep()) {
+                const int64_t valorCargo = cargosStmt.getColumn(6).getInt64();
+                if (valorCargo > std::numeric_limits<int64_t>::max() - valorCargosServicio) {
+                    throw std::overflow_error("El total de cobros de servicios excede el valor máximo permitido.");
+                }
+                valorCargosServicio += valorCargo;
+                cargosServicio.push_back({
+                    cargosStmt.getColumn(0).getInt(),
+                    cargosStmt.getColumn(1).getInt(),
+                    cargosStmt.getColumn(2).getString(),
+                    cargosStmt.getColumn(3).getString(),
+                    cargosStmt.getColumn(4).getString(),
+                    cargosStmt.getColumn(5).getString(),
+                    valorCargo
+                });
+            }
+
+            const int64_t valorPeriodo = valorCuotaOrd + valorMora + valorAlquilerParq
+                + ivaAlquilerParq + valorCargosServicio;
+            int64_t totalAPagar = saldoAnterior + valorPeriodo;
+            int64_t descuentoProntoPago = (pctDescuento > 0.0)
+                ? std::llround(valorCuotaOrd * (pctDescuento / 100.0))
+                : 0;
+
+            cuentasGeneradas++;
+            std::string numDoc = std::format("CC-{}-{:04d}", periodoCompacto, cuentasGeneradas);
+
+            // E. Construir comprobante contable automático (Partida Doble)
+            ComprobanteRequest compReq;
+            compReq.tipoComprobante = "FACTURACION";
+            compReq.fecha = fechaEmision;
+            compReq.descripcion = std::format("Causación Cuenta Cobro {} - {} ({})", numDoc, nomenclatura, periodo);
+            compReq.usuarioId = usuarioId;
+
+            // Débito Cartera 130505 / Crédito Ingreso 417005 (Cuota Ordinaria)
+            if (valorCuotaOrd > 0) {
+                compReq.movimientos.push_back({cCuotaOrd.cuentaCartera, terceroCobroId, unidadId, "Cuota Ord. " + periodo, valorCuotaOrd, 0});
+                compReq.movimientos.push_back({cCuotaOrd.cuentaIngreso, terceroCobroId, unidadId, "Ingreso Cuota Ord. " + periodo, 0, valorCuotaOrd});
+            }
+            // Débito Cartera 130515 / Crédito Ingreso 417015 (Intereses Mora)
+            if (valorMora > 0) {
+                compReq.movimientos.push_back({cMora.cuentaCartera, terceroCobroId, unidadId, "Intereses Mora " + periodo, valorMora, 0});
+                compReq.movimientos.push_back({cMora.cuentaIngreso, terceroCobroId, unidadId, "Ingreso Mora " + periodo, 0, valorMora});
+            }
+            // Débito Cartera 130525 / Crédito Ingreso 417025 (Alquiler Parqueadero)
+            if (valorAlquilerParq > 0) {
+                int64_t totalAlq = valorAlquilerParq + ivaAlquilerParq;
+                compReq.movimientos.push_back({cParqAlq.cuentaCartera, terceroCobroId, unidadId, "Alquiler Parqueadero " + periodo, totalAlq, 0});
+                compReq.movimientos.push_back({cParqAlq.cuentaIngreso, terceroCobroId, unidadId, "Ingreso Alquiler Parq. " + periodo, 0, totalAlq});
+            }
+            for (const auto& cargo : cargosServicio) {
+                compReq.movimientos.push_back({
+                    cargo.cuentaCartera, terceroCobroId, unidadId,
+                    cargo.conceptoNombre + " - " + cargo.descripcion,
+                    cargo.valor, 0
+                });
+                compReq.movimientos.push_back({
+                    cargo.cuentaIngreso, terceroCobroId, unidadId,
+                    "Ingreso " + cargo.conceptoNombre + " - " + cargo.descripcion,
+                    0, cargo.valor
+                });
+            }
+
+            int comprobanteId = AccountingEngine::registrarComprobanteEnTransaccion(compReq);
+
+            // F. Marcar cuentas anteriores como VENCIDAS si tenían saldo pendiente
+            SQLite::Statement vencStmt(db, R"(
+                UPDATE cuentas_cobro
+                SET estado = 'VENCIDA'
+                WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL')
+            )");
+            vencStmt.bind(1, unidadId);
+            vencStmt.exec();
+
+            // G. Insertar encabezado de Cuenta de Cobro
+            SQLite::Statement insertCC(db, R"(
+                INSERT INTO cuentas_cobro (
+                    numero_documento, unidad_id, tercero_id, periodo,
+                    fecha_emision, fecha_vencimiento, fecha_limite_descuento,
+                    saldo_anterior, valor_periodo, valor_descuento_pronto_pago,
+                    total_a_pagar, saldo_pendiente, estado, comprobante_contable_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?)
+            )");
+
+            insertCC.bind(1, numDoc);
+            insertCC.bind(2, unidadId);
+            insertCC.bind(3, terceroCobroId);
+            insertCC.bind(4, periodo);
+            insertCC.bind(5, fechaEmision);
+            insertCC.bind(6, fechaVencimiento);
+            insertCC.bind(7, fechaLimiteDesc);
+            insertCC.bind(8,  static_cast<int64_t>(saldoAnterior));
+            insertCC.bind(9,  static_cast<int64_t>(valorPeriodo));
+            insertCC.bind(10, static_cast<int64_t>(descuentoProntoPago));
+            insertCC.bind(11, static_cast<int64_t>(totalAPagar));
+            insertCC.bind(12, static_cast<int64_t>(valorPeriodo)); // Saldo propio de esta factura
+            insertCC.bind(13, comprobanteId);
+            insertCC.exec();
+
+            int cuentaCobroId = static_cast<int>(db.getLastInsertRowid());
+
+            // H. Insertar líneas de detalle
+            SQLite::Statement insertDet(db, R"(
+                INSERT INTO cuentas_cobro_detalle (
+                cuenta_cobro_id, concepto_id, descripcion, valor, iva, saldo_concepto
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            )");
+
+            auto agregarDetalle = [&](int conceptoId, const std::string& desc, int64_t val, int64_t iva) {
+                if (val <= 0) return;
+
+                insertDet.bind(1, cuentaCobroId);
+                insertDet.bind(2, conceptoId);
+                insertDet.bind(3, desc);
+                insertDet.bind(4, static_cast<int64_t>(val));
+                insertDet.bind(5, static_cast<int64_t>(iva));
+                insertDet.bind(6, static_cast<int64_t>(val + iva));
+                insertDet.exec();
+                insertDet.reset();
+            };
+
+            agregarDetalle(cCuotaOrd.id, "Cuota Ordinaria de Administración (" + periodo + ")", valorCuotaOrd, 0);
+            agregarDetalle(cMora.id, "Intereses de Mora sobre Capital Vencido", valorMora, 0);
+            agregarDetalle(cParqAlq.id, "Alquiler Parqueadero Común (" + periodo + ")", valorAlquilerParq, ivaAlquilerParq);
+            std::unordered_set<int> facturasServicioIncluidas;
+            for (const auto& cargo : cargosServicio) {
+                const std::string descripcion = cargo.conceptoNombre + " - " + cargo.descripcion;
+                agregarDetalle(cargo.conceptoId, descripcion, cargo.valor, 0);
+                if (facturasServicioIncluidas.insert(cargo.facturaId).second) {
+                    SQLite::Statement marcarIncluida(db, R"(
+                        UPDATE facturas_servicio_cobro
+                        SET estado = 'INCLUIDA_EN_CUENTA',
+                            cuenta_cobro_id = ?,
+                            comprobante_contable_id = ?
+                        WHERE factura_id = ? AND estado = 'POR_COBRAR_UNIDAD'
+                    )");
+                    marcarIncluida.bind(1, cuentaCobroId);
+                    marcarIncluida.bind(2, comprobanteId);
+                    marcarIncluida.bind(3, cargo.facturaId);
+                    marcarIncluida.exec();
+                    if (db.getChanges() != 1) {
+                        throw std::runtime_error("No se pudo asociar el cargo de servicio a la cuenta de cobro.");
+                    }
+                }
+            }
+        }
+
+        transaction.commit();
+    } catch (const SQLite::Exception& e) {
+       qCritical() << "Error al generar facturacion mensual: " << e.what();
+       throw std::runtime_error(std::string("No se pudo completar la facturación mensual: ") + e.what());
     }
 
-    transaction.commit();
     return cuentasGeneradas;
 }
 
-// std::vector<CuentaCobroResumen> listarCuentasCobro(const std::string& periodo = "") {
 std::vector<CuentaCobroResumen> BillingEngine::listarCuentasCobro(const std::string& periodo) { 
-    auto& db = DatabaseManager::instance().getDb();
     std::vector<CuentaCobroResumen> lista;
-    std::string sql = R"(
-        SELECT
-        c.id, c.numero_documento, c.unidad_id, u.nomenclatura,
-        t.nombre_razon_social, c.periodo, c.fecha_emision, c.fecha_vencimiento,
-        c.saldo_anterior, c.valor_periodo, c.total_a_pagar, c.saldo_pendiente, c.estado
-        FROM cuentas_cobro c
-        INNER JOIN unidades_privadas u ON c.unidad_id = u.id
-        INNER JOIN terceros t ON c.tercero_id = t.id
-    )";
 
-    if (!periodo.empty()) {
-        sql += " WHERE c.periodo = ? ";
+    try{
+        auto& db = DatabaseManager::instance().getDb();
+        std::string sql = R"(
+            SELECT
+            c.id, c.numero_documento, c.unidad_id, u.nomenclatura,
+            t.nombre_razon_social, c.periodo, c.fecha_emision, c.fecha_vencimiento,
+            c.saldo_anterior, c.valor_periodo, c.total_a_pagar, c.saldo_pendiente, c.estado
+            FROM cuentas_cobro c
+            INNER JOIN unidades_privadas u ON c.unidad_id = u.id
+            INNER JOIN terceros t ON c.tercero_id = t.id
+        )";
+
+        if (!periodo.empty()) {
+            sql += " WHERE c.periodo = ? ";
+        }
+
+        sql += " ORDER BY c.id DESC;";
+        SQLite::Statement query(db, sql);
+        if (!periodo.empty()) {
+            query.bind(1, periodo);
+        }
+
+        while (query.executeStep()) {
+            CuentaCobroResumen r;
+            r.id = query.getColumn(0).getInt();
+            r.numeroDocumento = query.getColumn(1).getString();
+            r.unidadId = query.getColumn(2).getInt();
+            r.unidadNomenclatura = query.getColumn(3).getString();
+            r.propietarioNombre = query.getColumn(4).getString();
+            r.periodo = query.getColumn(5).getString();
+            r.fechaEmision = query.getColumn(6).getString();
+            r.fechaVencimiento = query.getColumn(7).getString();
+            r.saldoAnterior = query.getColumn(8).getInt64();
+            r.valorPeriodo = query.getColumn(9).getInt64();
+            r.totalAPagar = query.getColumn(10).getInt64();
+            r.saldoPendiente = query.getColumn(11).getInt64();
+            r.estado = query.getColumn(12).getString();
+            lista.push_back(r);
+        }
+    } catch (const SQLite::Exception& e) {
+       qCritical() << "Error al listar cuentas de cobro: " << e.what();
     }
 
-    sql += " ORDER BY c.id DESC;";
-    SQLite::Statement query(db, sql);
-    if (!periodo.empty()) {
-        query.bind(1, periodo);
-    }
-
-    while (query.executeStep()) {
-        CuentaCobroResumen r;
-        r.id = query.getColumn(0).getInt();
-        r.numeroDocumento = query.getColumn(1).getString();
-        r.unidadId = query.getColumn(2).getInt();
-        r.unidadNomenclatura = query.getColumn(3).getString();
-        r.propietarioNombre = query.getColumn(4).getString();
-        r.periodo = query.getColumn(5).getString();
-        r.fechaEmision = query.getColumn(6).getString();
-        r.fechaVencimiento = query.getColumn(7).getString();
-        r.saldoAnterior = query.getColumn(8).getInt64();
-        r.valorPeriodo = query.getColumn(9).getInt64();
-        r.totalAPagar = query.getColumn(10).getInt64();
-        r.saldoPendiente = query.getColumn(11).getInt64();
-        r.estado = query.getColumn(12).getString();
-        lista.push_back(r);
-    }
     return lista;
 }
 
 CuentaCobroCompleta BillingEngine::obtenerCuentaCompleta(int cuentaCobroId) {
-    auto& db = DatabaseManager::instance().getDb();
     CuentaCobroCompleta cc;
-    SQLite::Statement query(db, R"(
-        SELECT
-        c.id, c.numero_documento, c.unidad_id, u.nomenclatura, u.torre_bloque, u.coeficiente,
-        t.nombre_razon_social, t.numero_documento, COALESCE(t.email, ''),
-        c.periodo, c.fecha_emision, c.fecha_vencimiento, COALESCE(c.fecha_limite_descuento, ''),
-        c.saldo_anterior, c.valor_periodo, c.valor_descuento_pronto_pago,
-        c.total_a_pagar, c.saldo_pendiente, c.estado
-        FROM cuentas_cobro c
-        INNER JOIN unidades_privadas u ON c.unidad_id = u.id
-        INNER JOIN terceros t ON c.tercero_id = t.id
-        WHERE c.id = ?
-    )");
 
-    query.bind(1, cuentaCobroId);
-    if (!query.executeStep()) {
-        throw std::runtime_error("No se encontró la cuenta de cobro solicitada.");
-    
+    try {
+        auto& db = DatabaseManager::instance().getDb();
+        SQLite::Statement query(db, R"(
+            SELECT
+            c.id, c.numero_documento, c.unidad_id, u.nomenclatura, u.torre_bloque, u.coeficiente,
+            t.nombre_razon_social, t.numero_documento, COALESCE(t.email, ''),
+            c.periodo, c.fecha_emision, c.fecha_vencimiento, COALESCE(c.fecha_limite_descuento, ''),
+            c.saldo_anterior, c.valor_periodo, c.valor_descuento_pronto_pago,
+            c.total_a_pagar, c.saldo_pendiente, c.estado
+            FROM cuentas_cobro c
+            INNER JOIN unidades_privadas u ON c.unidad_id = u.id
+            INNER JOIN terceros t ON c.tercero_id = t.id
+            WHERE c.id = ?
+        )");
+
+        query.bind(1, cuentaCobroId);
+        if (!query.executeStep()) {
+            throw std::runtime_error("No se encontró la cuenta de cobro solicitada.");
+        
+        }
+
+        cc.encabezado.id = query.getColumn(0).getInt();
+        cc.encabezado.numeroDocumento = query.getColumn(1).getString();
+        cc.encabezado.unidadId = query.getColumn(2).getInt();
+        cc.encabezado.unidadNomenclatura = query.getColumn(3).getString();
+        cc.torreBloque = query.getColumn(4).getString();
+        cc.coeficientePct = query.getColumn(5).getDouble() * 100.0;
+        cc.encabezado.propietarioNombre = query.getColumn(6).getString();
+        cc.terceroDocumento = query.getColumn(7).getString();
+        cc.terceroEmail = query.getColumn(8).getString();
+        cc.encabezado.periodo = query.getColumn(9).getString();
+        cc.encabezado.fechaEmision = query.getColumn(10).getString();
+        cc.encabezado.fechaVencimiento = query.getColumn(11).getString();
+        cc.fechaLimiteDescuento = query.getColumn(12).getString();
+        cc.encabezado.saldoAnterior = query.getColumn(13).getInt64();
+        cc.encabezado.valorPeriodo = query.getColumn(14).getInt64();
+        cc.valorDescuentoProntoPago = query.getColumn(15).getInt64();
+        cc.encabezado.totalAPagar = query.getColumn(16).getInt64();
+        cc.encabezado.saldoPendiente = query.getColumn(17).getInt64();
+        cc.encabezado.estado = query.getColumn(18).getString();
+        SQLite::Statement detStmt(db, R"(
+            SELECT con.codigo, d.descripcion, d.valor, d.iva
+            FROM cuentas_cobro_detalle d
+            INNER JOIN conceptos_cobro con ON d.concepto_id = con.id
+            WHERE d.cuenta_cobro_id = ?
+        )");
+
+        detStmt.bind(1, cuentaCobroId);
+        while (detStmt.executeStep()) {
+            cc.detalles.push_back({
+                detStmt.getColumn(0).getString(),
+                detStmt.getColumn(1).getString(),
+                detStmt.getColumn(2).getInt64(),
+                detStmt.getColumn(3).getInt64()
+            });
+        }
+    } catch (const SQLite::Exception& e) {
+       qCritical() << "Error al obtener la cuenta completa: " << e.what();
     }
 
-    cc.encabezado.id = query.getColumn(0).getInt();
-    cc.encabezado.numeroDocumento = query.getColumn(1).getString();
-    cc.encabezado.unidadId = query.getColumn(2).getInt();
-    cc.encabezado.unidadNomenclatura = query.getColumn(3).getString();
-    cc.torreBloque = query.getColumn(4).getString();
-    cc.coeficientePct = query.getColumn(5).getDouble() * 100.0;
-    cc.encabezado.propietarioNombre = query.getColumn(6).getString();
-    cc.terceroDocumento = query.getColumn(7).getString();
-    cc.terceroEmail = query.getColumn(8).getString();
-    cc.encabezado.periodo = query.getColumn(9).getString();
-    cc.encabezado.fechaEmision = query.getColumn(10).getString();
-    cc.encabezado.fechaVencimiento = query.getColumn(11).getString();
-    cc.fechaLimiteDescuento = query.getColumn(12).getString();
-    cc.encabezado.saldoAnterior = query.getColumn(13).getInt64();
-    cc.encabezado.valorPeriodo = query.getColumn(14).getInt64();
-    cc.valorDescuentoProntoPago = query.getColumn(15).getInt64();
-    cc.encabezado.totalAPagar = query.getColumn(16).getInt64();
-    cc.encabezado.saldoPendiente = query.getColumn(17).getInt64();
-    cc.encabezado.estado = query.getColumn(18).getString();
-    SQLite::Statement detStmt(db, R"(
-        SELECT con.codigo, d.descripcion, d.valor, d.iva
-        FROM cuentas_cobro_detalle d
-        INNER JOIN conceptos_cobro con ON d.concepto_id = con.id
-        WHERE d.cuenta_cobro_id = ?
-    )");
-
-    detStmt.bind(1, cuentaCobroId);
-    while (detStmt.executeStep()) {
-        cc.detalles.push_back({
-            detStmt.getColumn(0).getString(),
-            detStmt.getColumn(1).getString(),
-            detStmt.getColumn(2).getInt64(),
-            detStmt.getColumn(3).getInt64()
-        });
-    }
-    
     return cc;
 }

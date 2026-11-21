@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -25,6 +30,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QHeaderView>
@@ -39,7 +45,7 @@ TercerosWidget::TercerosWidget(int usuarioActualId, QWidget* parent)
 void TercerosWidget::setupUi() {
     auto* mainLayout = new QVBoxLayout(this);
 
-    auto* titleLabel = new QLabel("<h3>Directorio de Terceros (Propietarios, Inquilinos y Proveedores)</h3>", this);
+    auto* titleLabel = new QLabel("<h3>Directorio de Terceros (Propietarios, Inquilinos, Residentes, Visitantes y Proveedores)</h3>", this);
     mainLayout->addWidget(titleLabel);
 
     auto* contentLayout = new QHBoxLayout();
@@ -56,7 +62,9 @@ void TercerosWidget::setupUi() {
     m_cmbFiltroRol->addItem("Todos los Roles", "TODOS");
     m_cmbFiltroRol->addItem("Solo Propietarios", "PROPIETARIO");
     m_cmbFiltroRol->addItem("Solo Inquilinos", "INQUILINO");
+    m_cmbFiltroRol->addItem("Solo Residentes", "RESIDENTE");
     m_cmbFiltroRol->addItem("Solo Proveedores", "PROVEEDOR");
+    m_cmbFiltroRol->addItem("Solo Visitantes", "VISITANTE");
     connect(m_cmbFiltroRol, &QComboBox::currentIndexChanged, this, &TercerosWidget::onFiltroCambiado);
 
     filterBar->addWidget(m_txtBuscar, 1);
@@ -112,13 +120,17 @@ void TercerosWidget::setupUi() {
 
     // Grupo de Roles (un tercero puede ser Propietario y Proveedor a la vez)
     auto* rolesBox = new QGroupBox("Clasificación / Roles *", this);
-    auto* rolesLayout = new QHBoxLayout(rolesBox);
+    auto* rolesLayout = new QGridLayout(rolesBox);
     m_chkPropietario = new QCheckBox("Propietario", this);
     m_chkInquilino = new QCheckBox("Inquilino", this);
+    m_chkResidente = new QCheckBox("Residente", this);
     m_chkProveedor = new QCheckBox("Proveedor", this);
-    rolesLayout->addWidget(m_chkPropietario);
-    rolesLayout->addWidget(m_chkInquilino);
-    rolesLayout->addWidget(m_chkProveedor);
+    m_chkVisitante = new QCheckBox("Visitante", this);
+    rolesLayout->addWidget(m_chkPropietario, 0, 0);
+    rolesLayout->addWidget(m_chkInquilino, 0, 1);
+    rolesLayout->addWidget(m_chkResidente, 0, 2);
+    rolesLayout->addWidget(m_chkProveedor, 1, 0);
+    rolesLayout->addWidget(m_chkVisitante, 1, 1);
 
     m_chkActivo = new QCheckBox("Tercero Activo", this);
     m_chkActivo->setChecked(true);
@@ -189,7 +201,9 @@ void TercerosWidget::onFiltroCambiado() {
         QStringList roles;
         if (t.esPropietario) roles << "Propietario";
         if (t.esInquilino) roles << "Inquilino";
+        if (t.esResidente) roles << "Residente";
         if (t.esProveedor) roles << "Proveedor";
+        if (t.esVisitante) roles << "Visitante";
 
         m_tablaTerceros->setItem(row, 0, new QTableWidgetItem(docFormateado));
         m_tablaTerceros->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(t.nombreRazonSocial)));
@@ -219,7 +233,9 @@ void TercerosWidget::onFilaSeleccionada() {
 
     m_chkPropietario->setChecked(t.esPropietario);
     m_chkInquilino->setChecked(t.esInquilino);
+    m_chkResidente->setChecked(t.esResidente);
     m_chkProveedor->setChecked(t.esProveedor);
+    m_chkVisitante->setChecked(t.esVisitante);
     m_chkActivo->setChecked(t.activo);
 
     m_btnEliminar->setEnabled(true);
@@ -242,7 +258,9 @@ void TercerosWidget::limpiarFormulario() {
     m_txtDireccion->clear();
     m_chkPropietario->setChecked(false);
     m_chkInquilino->setChecked(false);
+    m_chkResidente->setChecked(false);
     m_chkProveedor->setChecked(false);
+    m_chkVisitante->setChecked(false);
     m_chkActivo->setChecked(true);
     m_btnEliminar->setEnabled(false);
     m_txtNumDoc->setFocus();
@@ -262,7 +280,9 @@ void TercerosWidget::onGuardarClicked() {
         t.direccionCorrespondencia = m_txtDireccion->text().trimmed().toStdString();
         t.esPropietario = m_chkPropietario->isChecked();
         t.esInquilino = m_chkInquilino->isChecked();
+        t.esResidente = m_chkResidente->isChecked();
         t.esProveedor = m_chkProveedor->isChecked();
+        t.esVisitante = m_chkVisitante->isChecked();
         t.activo = m_chkActivo->isChecked();
 
         if (m_terceroSeleccionadoId == 0) {

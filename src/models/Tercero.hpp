@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -36,6 +41,8 @@ struct Tercero {
     std::string direccionCorrespondencia;
     bool esPropietario = false;
     bool esInquilino = false;
+    bool esResidente = false;
     bool esProveedor = false;
+    bool esVisitante = false;
     bool activo = true;
 };

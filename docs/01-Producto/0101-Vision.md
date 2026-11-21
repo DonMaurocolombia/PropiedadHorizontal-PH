@@ -81,6 +81,7 @@ La primera versión se enfocará en la administración y en las necesidades iden
 - Apoyo a procesos administrativos mediante información centralizada.
   - Reporte de mantenimientos.
   - Reporte de actividades de la comunidad.
+- Generación básica de facturación DIAN (Las facturas se guardan como borradores locales en tablas independientes y quedan en la auditoría; no generan asientos contables ni se incorporan a los reportes financieros).
 
 El alcance exacto de cada módulo, sus reglas y sus prioridades se definirá en la documentación de requisitos.
 

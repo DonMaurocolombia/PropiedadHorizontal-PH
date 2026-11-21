@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -41,7 +46,7 @@ FacturacionWidget::FacturacionWidget(int usuarioActualId, QWidget* parent)
 void FacturacionWidget::setupUi() {
     auto* mainLayout = new QVBoxLayout(this);
 
-    auto* titleLabel = new QLabel("<h3>Facturación Masiva y Cuentas de Cobro (Ley 675)</h3>", this);
+    auto* titleLabel = new QLabel("<h3>Cuentas de Cobro (Ley 675)</h3>", this);
     mainLayout->addWidget(titleLabel);
 
     // --- PANEL SUPERIOR: LIQUIDACIÓN MASIVA ---

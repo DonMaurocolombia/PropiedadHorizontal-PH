@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -38,7 +43,7 @@ std::vector<Tercero> TerceroRepository::listar(const std::string& textoBusqueda,
             id, tipo_documento, numero_documento, COALESCE(dv, ''),
             nombre_razon_social, COALESCE(telefono, ''), COALESCE(celular, ''),
             COALESCE(email, ''), COALESCE(direccion_correspondencia, ''),
-            es_propietario, es_inquilino, es_proveedor, activo
+            es_propietario, es_inquilino, es_residente, es_proveedor, es_visitante, activo
         FROM terceros
         WHERE 1=1
     )";
@@ -47,8 +52,12 @@ std::vector<Tercero> TerceroRepository::listar(const std::string& textoBusqueda,
         sql += " AND es_propietario = 1 ";
     } else if (filtroRol == "INQUILINO") {
         sql += " AND es_inquilino = 1 ";
+    } else if (filtroRol == "RESIDENTE") {
+        sql += " AND es_residente = 1 ";
     } else if (filtroRol == "PROVEEDOR") {
         sql += " AND es_proveedor = 1 ";
+    } else if (filtroRol == "VISITANTE") {
+        sql += " AND es_visitante = 1 ";
     }
 
     if (!textoBusqueda.empty()) {
@@ -78,8 +87,10 @@ std::vector<Tercero> TerceroRepository::listar(const std::string& textoBusqueda,
         t.direccionCorrespondencia = query.getColumn(8).getString();
         t.esPropietario = query.getColumn(9).getInt() == 1;
         t.esInquilino = query.getColumn(10).getInt() == 1;
-        t.esProveedor = query.getColumn(11).getInt() == 1;
-        t.activo = query.getColumn(12).getInt() == 1;
+        t.esResidente = query.getColumn(11).getInt() == 1;
+        t.esProveedor = query.getColumn(12).getInt() == 1;
+        t.esVisitante = query.getColumn(13).getInt() == 1;
+        t.activo = query.getColumn(14).getInt() == 1;
         lista.push_back(t);
     }
 
@@ -93,8 +104,8 @@ int TerceroRepository::crear(const Tercero& t, int usuarioId) {
     if (t.nombreRazonSocial.empty()) {
         throw std::runtime_error("El nombre o razón social es obligatorio.");
     }
-    if (!t.esPropietario && !t.esInquilino && !t.esProveedor) {
-        throw std::runtime_error("Debe marcar al menos un rol (Propietario, Inquilino o Proveedor).");
+    if (!t.esPropietario && !t.esInquilino && !t.esResidente && !t.esProveedor && !t.esVisitante) {
+        throw std::runtime_error("Debe marcar al menos un rol (Propietario, Inquilino, Residente, Proveedor o Visitante).");
     }
 
     auto& db = DatabaseManager::instance().getDb();
@@ -113,8 +124,8 @@ int TerceroRepository::crear(const Tercero& t, int usuarioId) {
         INSERT INTO terceros (
             tipo_documento, numero_documento, dv, nombre_razon_social,
             telefono, celular, email, direccion_correspondencia,
-            es_propietario, es_inquilino, es_proveedor, activo
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            es_propietario, es_inquilino, es_residente, es_proveedor, es_visitante, activo
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     )");
 
     stmt.bind(1, t.tipoDocumento);
@@ -127,8 +138,10 @@ int TerceroRepository::crear(const Tercero& t, int usuarioId) {
     stmt.bind(8, t.direccionCorrespondencia);
     stmt.bind(9, t.esPropietario ? 1 : 0);
     stmt.bind(10, t.esInquilino ? 1 : 0);
-    stmt.bind(11, t.esProveedor ? 1 : 0);
-    stmt.bind(12, t.activo ? 1 : 0);
+    stmt.bind(11, t.esResidente ? 1 : 0);
+    stmt.bind(12, t.esProveedor ? 1 : 0);
+    stmt.bind(13, t.esVisitante ? 1 : 0);
+    stmt.bind(14, t.activo ? 1 : 0);
     stmt.exec();
 
     int newId = static_cast<int>(db.getLastInsertRowid());
@@ -151,7 +164,7 @@ void TerceroRepository::actualizar(const Tercero& t, int usuarioId) {
     if (t.numeroDocumento.empty() || t.nombreRazonSocial.empty()) {
         throw std::runtime_error("Documento y Nombre/Razón Social son obligatorios.");
     }
-    if (!t.esPropietario && !t.esInquilino && !t.esProveedor) {
+    if (!t.esPropietario && !t.esInquilino && !t.esResidente && !t.esProveedor && !t.esVisitante) {
         throw std::runtime_error("Debe marcar al menos un rol para el tercero.");
     }
 
@@ -172,7 +185,8 @@ void TerceroRepository::actualizar(const Tercero& t, int usuarioId) {
         UPDATE terceros SET
             tipo_documento = ?, numero_documento = ?, dv = ?, nombre_razon_social = ?,
             telefono = ?, celular = ?, email = ?, direccion_correspondencia = ?,
-            es_propietario = ?, es_inquilino = ?, es_proveedor = ?, activo = ?
+            es_propietario = ?, es_inquilino = ?, es_residente = ?,
+            es_proveedor = ?, es_visitante = ?, activo = ?
         WHERE id = ?
     )");
 
@@ -186,9 +200,11 @@ void TerceroRepository::actualizar(const Tercero& t, int usuarioId) {
     stmt.bind(8, t.direccionCorrespondencia);
     stmt.bind(9, t.esPropietario ? 1 : 0);
     stmt.bind(10, t.esInquilino ? 1 : 0);
-    stmt.bind(11, t.esProveedor ? 1 : 0);
-    stmt.bind(12, t.activo ? 1 : 0);
-    stmt.bind(13, t.id);
+    stmt.bind(11, t.esResidente ? 1 : 0);
+    stmt.bind(12, t.esProveedor ? 1 : 0);
+    stmt.bind(13, t.esVisitante ? 1 : 0);
+    stmt.bind(14, t.activo ? 1 : 0);
+    stmt.bind(15, t.id);
     stmt.exec();
 
     SQLite::Statement auditStmt(db, R"(

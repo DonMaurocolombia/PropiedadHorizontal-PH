@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/db">
+        <file alias="schema.sql">../db/schema.sql</file>
+        <file alias="puc_colombia.sql">../db/puc_colombia.sql</file>
+    </qresource>
+    <qresource prefix="/db/migrations">
+        <file alias="002_facturas_servicio_contexto.sql">../db/migrations/002_facturas_servicio_contexto.sql</file>
+    </qresource>
+</RCC>

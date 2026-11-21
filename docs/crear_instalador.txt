@@ -1,0 +1,44 @@
+
+
+Flatpak (la más portable)
+Empaqueta todo (ejecutable, .desktop, icono) en un único archivo .flatpak que el usuario instala con:
+
+flatpak install PropiedadHorizontalPH.flatpak
+
+No necesita tocar iconos manualmente; el compositor los resuelve internamente. Requiere un flatpak-builder y un manifest.json, pero una vez configurado es transparente.
+
+
+AppImage
+Un solo archivo autocontenido con el ejecutable + dependencias + .desktop + icono. El usuario solo hace chmod +x y lo ejecuta. Con AppImageLauncher (que viene preinstalado en muchas distros) se integra automáticamente en el menú.
+
+
+Script de instalación:
+La más simple, pero puede fallar con otras distribuciones, con distribuciones basadas en Arch funciona.
+
+Distribuyes un .tar.gz con:
+
+PropiedadHorizontalPH/
+├── PropiedadHorizontalPH        # ejecutable
+├── PropiedadHorizontalPH.desktop
+└── PropiedadHorizontalPH.png    # icono
+
+Y un install.sh:
+
+#!/bin/bash
+DEST_BIN=~/.local/bin
+DEST_ICONS=~/.local/share/icons/hicolor/256x256/apps
+DEST_APPS=~/.local/share/applications
+
+mkdir -p "$DEST_BIN" "$DEST_ICONS" "$DEST_APPS"
+
+cp PropiedadHorizontalPH "$DEST_BIN/"
+cp PropiedadHorizontalPH.png "$DEST_ICONS/"
+cp PropiedadHorizontalPH.desktop "$DEST_APPS/"
+
+gtk-update-icon-cache ~/.local/share/icons/hicolor/
+update-desktop-database "$DEST_APPS"
+
+
+El usuario ejecuta ./install.sh y listo.
+
+

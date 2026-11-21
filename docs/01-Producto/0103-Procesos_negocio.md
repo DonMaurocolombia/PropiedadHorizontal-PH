@@ -19,6 +19,7 @@ Los procesos descritos son una propuesta inicial que deberá validarse con las a
 | Administrador | Gestiona y supervisa los procesos de la copropiedad. |
 | Auxiliar administrativo | Apoya las actividades administrativas y documentales. |
 | Contabilidad | Gestiona y revisa información contable y financiera. |
+| Revisor Fiscal | Certificar la razonabilidad de los estados financieros y dar cuenta oportuna por escrito de cualquier irregularidad detectada a la Asamblea o al Consejo de Administración. |
 | Consejo de administración | Participa en decisiones y seguimiento de la copropiedad. |
 | Propietario | Persona titular de uno o varios inmuebles. |
 | Residente | Persona que habita un inmueble. |

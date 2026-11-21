@@ -72,7 +72,9 @@ CREATE TABLE terceros (
     direccion_correspondencia TEXT,
     es_propietario INTEGER NOT NULL DEFAULT 0 CHECK (es_propietario IN (0, 1)),
     es_inquilino INTEGER NOT NULL DEFAULT 0 CHECK (es_inquilino IN (0, 1)),
+    es_residente INTEGER NOT NULL DEFAULT 0 CHECK (es_residente IN (0, 1)),
     es_proveedor INTEGER NOT NULL DEFAULT 0 CHECK (es_proveedor IN (0, 1)),
+    es_visitante INTEGER NOT NULL DEFAULT 0 CHECK (es_visitante IN (0, 1)),
     activo INTEGER NOT NULL DEFAULT 1
 );
 
@@ -228,6 +230,8 @@ CREATE TABLE conceptos_cobro (
     genera_interes_mora INTEGER NOT NULL DEFAULT 1 CHECK (genera_interes_mora IN (0, 1)),
     aplica_iva INTEGER NOT NULL DEFAULT 0 CHECK (aplica_iva IN (0, 1)),
     porcentaje_iva REAL DEFAULT 0.0,
+    tipo_concepto TEXT NOT NULL DEFAULT 'CUENTA_MENSUAL'
+        CHECK (tipo_concepto IN ('CUENTA_MENSUAL', 'SERVICIO')),
     FOREIGN KEY (cuenta_ingreso_codigo) REFERENCES puc_cuentas(codigo),
     FOREIGN KEY (cuenta_cartera_codigo) REFERENCES puc_cuentas(codigo)
 );
@@ -308,6 +312,80 @@ CREATE TABLE recibos_caja_aplicacion (
     FOREIGN KEY (cuenta_cobro_detalle_id) REFERENCES cuentas_cobro_detalle(id)
 );
 
+CREATE TABLE IF NOT EXISTS facturas_servicio (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tercero_id INTEGER NOT NULL,
+    fecha_emision TEXT NOT NULL,
+    fecha_vencimiento TEXT NOT NULL,
+    subtotal_cop INTEGER NOT NULL CHECK (subtotal_cop >= 0),
+    iva_total_cop INTEGER NOT NULL CHECK (iva_total_cop >= 0),
+    total_cop INTEGER NOT NULL CHECK (total_cop = subtotal_cop + iva_total_cop),
+    estado TEXT NOT NULL DEFAULT 'BORRADOR' CHECK (estado = 'BORRADOR'),
+    usuario_id INTEGER NOT NULL,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (tercero_id) REFERENCES terceros(id),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
+
+CREATE TABLE IF NOT EXISTS facturas_servicio_detalle (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    factura_id INTEGER NOT NULL,
+    descripcion TEXT NOT NULL CHECK (length(trim(descripcion)) > 0),
+    valor_base_cop INTEGER NOT NULL CHECK (valor_base_cop > 0),
+    iva_tasa_puntos_base INTEGER NOT NULL CHECK (iva_tasa_puntos_base BETWEEN 0 AND 10000),
+    iva_cop INTEGER NOT NULL CHECK (iva_cop >= 0),
+    FOREIGN KEY (factura_id) REFERENCES facturas_servicio(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS facturas_servicio_contexto (
+    factura_id INTEGER PRIMARY KEY,
+    unidad_visitada_id INTEGER NOT NULL,
+    tipo_servicio TEXT NOT NULL CHECK (
+        tipo_servicio IN (
+            'PARQUEADERO_VEHICULO',
+            'ALQUILER_SALON_COMUNAL',
+            'USO_ZONA_ASADOS',
+            'OTRO'
+        )
+    ),
+    placa_vehiculo TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (factura_id)
+        REFERENCES facturas_servicio(id) ON DELETE CASCADE,
+    FOREIGN KEY (unidad_visitada_id) REFERENCES unidades_privadas(id)
+);
+
+CREATE TABLE IF NOT EXISTS facturas_servicio_cobro (
+    factura_id INTEGER PRIMARY KEY,
+    concepto_id INTEGER,
+    estado TEXT NOT NULL DEFAULT 'BORRADOR'
+        CHECK (estado IN ('BORRADOR', 'PAGADA', 'POR_COBRAR_UNIDAD', 'INCLUIDA_EN_CUENTA')),
+    cuenta_cobro_id INTEGER,
+    comprobante_contable_id INTEGER,
+    FOREIGN KEY (factura_id)
+        REFERENCES facturas_servicio(id) ON DELETE CASCADE,
+    FOREIGN KEY (concepto_id) REFERENCES conceptos_cobro(id),
+    FOREIGN KEY (cuenta_cobro_id) REFERENCES cuentas_cobro(id),
+    FOREIGN KEY (comprobante_contable_id) REFERENCES comprobantes_contables(id)
+);
+
+CREATE TABLE IF NOT EXISTS facturas_servicio_pagos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    factura_id INTEGER NOT NULL UNIQUE,
+    numero_recibo TEXT NOT NULL UNIQUE,
+    fecha_pago TEXT NOT NULL,
+    forma_pago TEXT NOT NULL
+        CHECK (forma_pago IN ('TRANSFERENCIA', 'CONSIGNACION', 'PSE', 'EFECTIVO', 'DATAFONO')),
+    cuenta_banco_codigo TEXT NOT NULL,
+    referencia_bancaria TEXT NOT NULL DEFAULT '',
+    valor_pagado INTEGER NOT NULL CHECK (valor_pagado > 0),
+    comprobante_contable_id INTEGER NOT NULL,
+    usuario_id INTEGER NOT NULL,
+    FOREIGN KEY (factura_id)
+        REFERENCES facturas_servicio(id),
+    FOREIGN KEY (cuenta_banco_codigo) REFERENCES puc_cuentas(codigo),
+    FOREIGN KEY (comprobante_contable_id) REFERENCES comprobantes_contables(id),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+);
 
 -- ============================================================================
 -- 7. MÓDULOS COMPLEMENTARIOS (ZONAS COMUNES, ASAMBLEAS, PQRS, MANTENIMIENTO)
@@ -393,8 +471,12 @@ CREATE TABLE mantenimientos_contratos (
 -- ============================================================================
 -- 8. ÍNDICES PARA CONSULTAS RÁPIDAS EN C++
 -- ============================================================================
+-- CREATE INDEX IF NOT EXISTS idx_...
 CREATE INDEX idx_unidades_propietario ON unidades_privadas(propietario_principal_id);
 CREATE INDEX idx_movimientos_cuenta ON movimientos_contables(cuenta_codigo);
 CREATE INDEX idx_movimientos_tercero ON movimientos_contables(tercero_id);
 CREATE INDEX idx_cuentas_cobro_unidad ON cuentas_cobro(unidad_id, estado);
 CREATE INDEX idx_recibos_unidad ON recibos_caja(unidad_id, fecha_pago);
+CREATE INDEX idx_facturas_servicio_tercero ON facturas_servicio(tercero_id, fecha_emision);
+CREATE INDEX idx_facturas_servicio_detalle_factura ON facturas_servicio_detalle(factura_id);
+CREATE INDEX idx_facturas_servicio_cobro_estado ON facturas_servicio_cobro(estado, factura_id);

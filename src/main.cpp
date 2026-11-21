@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -32,6 +37,9 @@
 
 
 int main(int argc, char* argv[]) {
+    // hace refencia al archivo PropiedadHorizontalPH.desktop
+    QGuiApplication::setDesktopFileName("PropiedadHorizontalPH");
+
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create("Fusion"));  // ← agrega esta línea
     app.setApplicationName("PropiedadHorizontalPH");

@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* MiPrograma - Descripción breve
+/*
+   Administrador - PH: Administrador PH busca facilitar y organizar la 
+   administración de copropiedades mediante una plataforma que centralice 
+   la información, los documentos y los procesos administrativos, bajo la 
+   Licencia GPL-3.0-or-later.
+   
    Copyright (C) 2026 Oscar Mauricio Bonil P.
 
    This program is free software: you can redistribute it and/or modify
@@ -26,6 +31,8 @@
 #include "ui/UnidadesWidget.hpp"
 #include "ui/ParqueaderosWidget.hpp"
 #include "ui/FacturacionWidget.hpp"
+#include "ui/FacturasServicioWidget.hpp"
+#include "ui/ConceptosCobroWidget.hpp"
 #include "ui/RecaudoWidget.hpp"
 #include "ui/EgresosWidget.hpp"
 #include "ui/PresupuestoWidget.hpp"
@@ -57,7 +64,6 @@ void MainWindow::setupUi() {
     // Cargar nombre de la copropiedad en el título de la ventana
     QString nombreCopropiedad = "Administración Propiedad Horizontal";
     auto& db = DatabaseManager::instance().getDb();
-    // SQLite::Statement q(db, "SELECT razon_social FROM copropiedad_config WHERE id = 1");
     SQLite::Statement q(db, "SELECT razon_social, orientacion_menu FROM copropiedad_config WHERE id = 1");
     if (q.executeStep()) {
         nombreCopropiedad = QString::fromStdString(q.getColumn(0).getString());
@@ -107,52 +113,77 @@ void MainWindow::setupUi() {
     }
 
     // Instanciar todos los módulos del sistema
-    auto* tabTerceros      = new TercerosWidget(m_sesion.id, this);
-    auto* tabUnidades      = new UnidadesWidget(m_sesion.id, this);
-    auto* tabParqueaderos  = new ParqueaderosWidget(m_sesion.id, this);
-    auto* tabFacturacion   = new FacturacionWidget(m_sesion.id, this);
-    auto* tabRecaudo       = new RecaudoWidget(m_sesion.id, this);
-    auto* tabEgresos       = new EgresosWidget(m_sesion.id, this);
-    auto* tabPresupuesto   = new PresupuestoWidget(m_sesion.id, this);
-    auto* tabReportes      = new ReportesWidget(this);
-    auto* tabAsambleas     = new AsambleasWidget(m_sesion.id, this);
-    auto* tabSeguridad     = new UsuariosAuditoriaWidget(m_sesion, this);
-    auto* tabConfig        = new ConfiguracionWidget(m_sesion, m_rutaDb, this);
+    m_tabTerceros         = new TercerosWidget(m_sesion.id, this);
+    m_tabUnidades         = new UnidadesWidget(m_sesion.id, this);
+    m_tabParqueaderos     = new ParqueaderosWidget(m_sesion.id, this);
+    m_tabFacturacion      = new FacturacionWidget(m_sesion.id, this);
+    m_tabFacturasServicio = new FacturasServicioWidget(m_sesion.id, this);
+    m_tabConceptosCobro   = new ConceptosCobroWidget(m_sesion.id, this);
+    m_tabRecaudo          = new RecaudoWidget(m_sesion.id, this);
+    m_tabEgresos          = new EgresosWidget(m_sesion.id, this);
+    m_tabPresupuesto      = new PresupuestoWidget(m_sesion.id, this);
+    m_tabReportes         = new ReportesWidget(this);
+    m_tabAsambleas        = new AsambleasWidget(m_sesion.id, this);
+    m_tabSeguridad        = new UsuariosAuditoriaWidget(m_sesion, this);
+    m_tabConfig           = new ConfiguracionWidget(m_sesion, m_rutaDb, this);
 
     // --- SINCRONIZACIÓN EN TIEMPO REAL ENTRE MÓDULOS ---
     // 1. Al crear/editar terceros, actualizar combos en Unidades y Egresos
-    connect(tabTerceros, &TercerosWidget::tercerosActualizados, tabUnidades, &UnidadesWidget::recargarDatos);
-    connect(tabTerceros, &TercerosWidget::tercerosActualizados, tabEgresos, &EgresosWidget::recargarDatos);
+    connect(m_tabTerceros, &TercerosWidget::tercerosActualizados, 
+            m_tabUnidades, &UnidadesWidget::recargarDatos);
+    connect(m_tabTerceros, &TercerosWidget::tercerosActualizados, 
+            m_tabEgresos,  &EgresosWidget::recargarDatos);
+    connect(m_tabTerceros, &TercerosWidget::tercerosActualizados,
+            m_tabFacturasServicio, &FacturasServicioWidget::recargarTerceros);
+    connect(m_tabUnidades,         &UnidadesWidget::unidadesActualizadas,
+            m_tabFacturasServicio, &FacturasServicioWidget::recargarUnidades);
+    connect(m_tabConceptosCobro,   &ConceptosCobroWidget::conceptosActualizados,
+            m_tabFacturasServicio, &FacturasServicioWidget::recargarConceptos);
+    connect(m_tabFacturasServicio, &FacturasServicioWidget::facturacionActualizada,
+            m_tabFacturacion,      &FacturacionWidget::recargarTabla);
+    connect(m_tabFacturasServicio, &FacturasServicioWidget::facturacionActualizada,
+            m_tabRecaudo,          &RecaudoWidget::recargarDatos);
+    connect(m_tabFacturasServicio, &FacturasServicioWidget::facturacionActualizada,
+            m_tabReportes,         &ReportesWidget::actualizarTodosLosReportes);
 
     // 2. Al generar facturación mensual, actualizar Recaudo y Reportes
-    connect(tabFacturacion, &FacturacionWidget::facturacionGenerada, tabRecaudo, &RecaudoWidget::recargarDatos);
-    connect(tabFacturacion, &FacturacionWidget::facturacionGenerada, tabReportes, &ReportesWidget::actualizarTodosLosReportes);
+    connect(m_tabFacturacion, &FacturacionWidget::facturacionGenerada, 
+            m_tabRecaudo,     &RecaudoWidget::recargarDatos);
+    connect(m_tabFacturacion, &FacturacionWidget::facturacionGenerada, 
+            m_tabReportes,    &ReportesWidget::actualizarTodosLosReportes);
 
     // 3. Al registrar un pago (Recibo de Caja), actualizar Facturación y Reportes
-    connect(tabRecaudo, &RecaudoWidget::pagoRegistrado, tabFacturacion, &FacturacionWidget::recargarTabla);
-    connect(tabRecaudo, &RecaudoWidget::pagoRegistrado, tabReportes, &ReportesWidget::actualizarTodosLosReportes);
+    connect(m_tabRecaudo,     &RecaudoWidget::pagoRegistrado, 
+            m_tabFacturacion, &FacturacionWidget::recargarTabla);
+    connect(m_tabRecaudo,     &RecaudoWidget::pagoRegistrado, 
+            m_tabReportes,    &ReportesWidget::actualizarTodosLosReportes);
 
     // 4. Al registrar un egreso o anulación, actualizar Presupuesto y Reportes Financieros
-    connect(tabEgresos, &EgresosWidget::egresoRegistrado, tabPresupuesto, &PresupuestoWidget::recargarTodo);
-    connect(tabEgresos, &EgresosWidget::egresoRegistrado, tabReportes, &ReportesWidget::actualizarTodosLosReportes);
+    connect(m_tabEgresos,     &EgresosWidget::egresoRegistrado, 
+            m_tabPresupuesto, &PresupuestoWidget::recargarTodo);
+    connect(m_tabEgresos,     &EgresosWidget::egresoRegistrado, 
+            m_tabReportes,    &ReportesWidget::actualizarTodosLosReportes);
 
     // 5. Al actualizar el nombre de la copropiedad, refrescar título de ventana
-    connect(tabConfig, &ConfiguracionWidget::configuracionActualizada, this, [this](const QString& nuevoNombre) {
+    connect(m_tabConfig, &ConfiguracionWidget::configuracionActualizada, 
+            this,        [this](const QString& nuevoNombre) {
         setWindowTitle(nuevoNombre + " - Sistema de Gestión PH");
     });
 
     // Registrar pestañas en orden lógico de operación
-    m_tabs->addTab(tabUnidades,     "1. Unidades Privadas");        // indice: 0 
-    m_tabs->addTab(tabTerceros,     "2. Terceros");                 // indice: 1
-    m_tabs->addTab(tabParqueaderos, "3. Parqueaderos y Bodegas");   // indice: 2
-    m_tabs->addTab(tabFacturacion,  "4. Facturación");              // indice: 3
-    m_tabs->addTab(tabRecaudo,      "5. Recaudo y Paz y Salvos");   // indice: 4
-    m_tabs->addTab(tabEgresos,      "6. Egresos y Proveedores");    // indice: 5
-    m_tabs->addTab(tabPresupuesto,  "7. Presupuesto");              // indice: 6
-    m_tabs->addTab(tabReportes,     "8. Reportes Financieros");     // indice: 7
-    m_tabs->addTab(tabAsambleas,    "9. Asambleas y Quórum");       // indice: 8
-    m_tabs->addTab(tabSeguridad,    "10. Usuarios y Auditoría");    // indice: 9
-    m_tabs->addTab(tabConfig,       "11. Configuración");           // indice: 10
+    m_tabs->addTab(m_tabFacturasServicio, "1. Facturas Servicios");            // indice: 0
+    m_tabs->addTab(m_tabUnidades,         "2. Unidades Privadas");             // indice: 1 
+    m_tabs->addTab(m_tabTerceros,         "3. Terceros");                      // indice: 2
+    m_tabs->addTab(m_tabParqueaderos,     "4. Parqueaderos y Bodegas");        // indice: 3
+    m_tabs->addTab(m_tabFacturacion,      "5. Cuentas de Cobro");              // indice: 4
+    m_tabs->addTab(m_tabRecaudo,          "6. Recaudo y Paz y Salvos");        // indice: 5
+    m_tabs->addTab(m_tabEgresos,          "7. Egresos y Proveedores");         // indice: 6
+    m_tabs->addTab(m_tabPresupuesto,      "8. Presupuesto");                   // indice: 7
+    m_tabs->addTab(m_tabReportes,         "9. Reportes Financieros");          // indice: 8
+    m_tabs->addTab(m_tabAsambleas,        "10. Asambleas y Quórum");           // indice: 9
+    m_tabs->addTab(m_tabSeguridad,        "11. Usuarios y Auditoría");         // indice: 10
+    m_tabs->addTab(m_tabConceptosCobro,   "12. Conceptos cobro de servicios"); // indice: 11
+    m_tabs->addTab(m_tabConfig,           "13. Configuración");                // indice: 12
 
     setCentralWidget(m_tabs);
 
@@ -200,20 +231,30 @@ void MainWindow::aplicarPermisosPorRol() {
     // Ajusta los índices según el orden en que agregaste las pestañas
     if (m_sesion.rolNombre == "REVISOR_FISCAL") {
         // El Revisor Fiscal audita libros, presupuesto, reportes y logs, sin operar facturación diaria
-        m_tabs->setTabEnabled(3, false); // Facturación
-        m_tabs->setTabEnabled(4, false); // Recaudo
-        m_tabs->setTabEnabled(5, false); // Egresos
-        m_tabs->setCurrentIndex(7);      // Abre directamente en Reportes Financieros
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabFacturacion),    false); // Facturación 
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabRecaudo),        false); // Recaudo
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabEgresos),        false); // Egresos
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConfig),         false); // Configuración
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConceptosCobro), false); // Facturas de Servicios 
+        m_tabs->setCurrentIndex(m_tabs->indexOf(m_tabReportes));            // Abre directamente en Reportes Financieros 
         // Aquí podrías deshabilitar botones de edición en cada widget
         // (ej: unidadesTab->setSoloLectura(true))
     } else if (m_sesion.rolNombre == "ASISTENTE") {
         // El Asistente opera residentes, unidades, parqueaderos, recaudo y asambleas
-        m_tabs->setTabEnabled(5, false);  // Egresos
-        m_tabs->setTabEnabled(6, false);  // Presupuesto
-        m_tabs->setTabEnabled(9, false);  // Usuarios y Auditoría
-        m_tabs->setTabEnabled(10, false); // Configuración
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabEgresos),        false); // Egresos
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabPresupuesto),    false); // Presupuesto 
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabSeguridad),      false); // Usuarios y Auditoría
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConfig),         false); // Configuración
+        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConceptosCobro), false); // Facturas de Servicios
     }
-    // Agrega más roles según necesites
+    /***************
+     * Agrega más roles según necesidad, con la misma lógica de habilitar o deshabilitar
+     * pestañas y botones según permisos definidos.
+     * 
+     * A futuro, se podría implementar un sistema de permisos leyendo desde la base de datos,
+     * lo que permitiría asignar permisos más dinámicos y detallados de cada rol o usuario y
+     * no quemado en el código fuente.
+     *********************************/
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
