@@ -27,7 +27,7 @@
 
 #include "ConfiguracionWidget.hpp"
 #include "core/DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -43,10 +43,8 @@
 // #include <QDate>
 
 
-ConfiguracionWidget::ConfiguracionWidget(const UsuarioSesion& sesion,
-                                         const std::string& rutaDbActual,
-                                         QWidget* parent)
-    : QWidget(parent), m_sesion(sesion), m_rutaDb(rutaDbActual) {
+ConfiguracionWidget::ConfiguracionWidget(const UsuarioSesion& sesion, QWidget* parent)
+    : QWidget(parent), m_sesion(sesion) {
     setupUi();
     cargarDatos();
     cargarHistorialTasas();
@@ -240,10 +238,10 @@ void ConfiguracionWidget::onRegistrarTasaMensualClicked() {
     std::string resolucion = m_txtResolucionSfc->text().trimmed().toStdString();
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
     // Insertar o actualizar la tasa del periodo en el historial
-    SQLite::Statement stmt(db, R"(
+    Db::Statement stmt(db, R"(
         INSERT INTO tasas_mora_historial (
             periodo, tasa_efectiva_anual, tasa_mensual_aplicada, resolucion_sfc, registrado_por_id
         ) VALUES (?, ?, ?, ?, ?)
@@ -252,7 +250,7 @@ void ConfiguracionWidget::onRegistrarTasaMensualClicked() {
             tasa_mensual_aplicada = excluded.tasa_mensual_aplicada,
             resolucion_sfc = excluded.resolucion_sfc,
             registrado_por_id = excluded.registrado_por_id,
-            fecha_registro = datetime('now', 'localtime')
+            fecha_registro = CURRENT_TIMESTAMP::text
     )");
 
     stmt.bind(1, periodo);
@@ -263,11 +261,11 @@ void ConfiguracionWidget::onRegistrarTasaMensualClicked() {
     stmt.exec();
 
     // Actualizar también la tasa vigente por defecto si ya existe configuración general
-    SQLite::Statement updCfg(db, "UPDATE copropiedad_config SET tasa_mora_mensual = ? WHERE id = 1");
+    Db::Statement updCfg(db, "UPDATE copropiedad_config SET tasa_mora_mensual = ? WHERE id = 1");
     updCfg.bind(1, tasaMensualDecimal);
     updCfg.exec();
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'CONFIGURACION', 'EDITAR', 'tasas_mora_historial', 0, ?)
     )");
@@ -295,7 +293,7 @@ void ConfiguracionWidget::onRegistrarTasaMensualClicked() {
 
 void ConfiguracionWidget::cargarHistorialTasas() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement q(db, R"(
+    Db::Statement q(db, R"(
         SELECT periodo, tasa_efectiva_anual, tasa_mensual_aplicada,
         COALESCE(resolucion_sfc, ''), fecha_registro
         FROM tasas_mora_historial
@@ -316,7 +314,7 @@ void ConfiguracionWidget::cargarHistorialTasas() {
 
 void ConfiguracionWidget::cargarDatos() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement q(db, R"(
+    Db::Statement q(db, R"(
         SELECT nit, razon_social, direccion, COALESCE(telefono, ''), COALESCE(email, ''),
         representante_legal, COALESCE(contador_nombre, ''), COALESCE(contador_tp, ''),
         COALESCE(revisor_fiscal_nombre, ''), COALESCE(revisor_fiscal_tp, ''),
@@ -352,9 +350,9 @@ void ConfiguracionWidget::onGuardarClicked() {
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
     try {
-        SQLite::Statement stmt(db, R"(
+        Db::Statement stmt(db, R"(
             INSERT INTO copropiedad_config (
                 id, nit, razon_social, direccion, telefono, email, representante_legal, contador_nombre, contador_tp,
                 revisor_fiscal_nombre, revisor_fiscal_tp, tasa_mora_mensual, dia_limite_pronto_pago, 
@@ -404,7 +402,7 @@ void ConfiguracionWidget::onGuardarClicked() {
     }
 
     try {
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'CONFIGURACION', 'EDITAR', 'copropiedad_config', 1, 'Actualización parámetros generales')
         )");
@@ -424,24 +422,23 @@ void ConfiguracionWidget::onGuardarClicked() {
 }
 
 void ConfiguracionWidget::onCrearBackupClicked() {
-    QString sugerido = QString("Backup_PH_%1.db")
+    QString sugerido = QString("Backup_PH_%1.backup")
         .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmm"));
 
     QString destino = QFileDialog::getSaveFileName(
-        this, "Guardar Copia de Seguridad SQLite", sugerido, "Base de Datos SQLite (*.db)"
+        this, "Guardar copia de seguridad PostgreSQL", sugerido,
+        "Respaldo PostgreSQL (*.backup)"
     );
 
     if (destino.isEmpty()) return;
 
-    DatabaseManager::instance().getDb().exec("PRAGMA wal_checkpoint(TRUNCATE);");
-    if (QFile::exists(destino)) {
-        QFile::remove(destino);
-    }
-
-    if (QFile::copy(QString::fromStdString(m_rutaDb), destino)) {
+    QString error;
+    if (DatabaseManager::instance().createBackup(destino, &error)) {
         QMessageBox::information(this, "Respaldo Exitoso", "Copia de seguridad creada correctamente.");
     } else {
-        QMessageBox::critical(this, "Error", "No se pudo copiar el archivo de base de datos.");
+        QMessageBox::critical(
+            this, "Error", "No se pudo crear el respaldo PostgreSQL:\n" + error
+        );
     }
 }
 

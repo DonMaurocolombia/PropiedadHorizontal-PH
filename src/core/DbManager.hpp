@@ -2,46 +2,25 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/*
-   Administrador - PH: Administrador PH busca facilitar y organizar la 
-   administración de copropiedades mediante una plataforma que centralice 
-   la información, los documentos y los procesos administrativos, bajo la 
-   Licencia GPL-3.0-or-later.
-   
-   Copyright (C) 2026 Oscar Mauricio Bonil P.
-
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
-
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
-
-
 #pragma once
 
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "PostgresDatabase.hpp"
+
 #include <QString>
+
 #include <memory>
-#include <string>
 
 class DatabaseManager {
 public:
     static DatabaseManager& instance();
 
-    // Abre o crea la base de datos y ejecuta schema.sql si es nueva
-    bool initialize(const std::string& dbPath);
+    bool initialize(const QString& applicationDirectory);
+    Db::Database& getDb();
+    QString lastError() const;
+    bool isServerMode() const;
+    bool stopLocalServer(QString* errorMessage = nullptr) const;
+    bool createBackup(const QString& destination, QString* errorMessage = nullptr) const;
 
-    SQLite::Database& getDb();
-
-    // Evitar copias (Patrón Singleton)
     DatabaseManager(const DatabaseManager&) = delete;
     DatabaseManager& operator=(const DatabaseManager&) = delete;
 
@@ -49,8 +28,17 @@ private:
     DatabaseManager() = default;
     ~DatabaseManager() = default;
 
-    bool runSchemaFromResources(const std::string& dbName);
-    // bool ejecutarSchema(SQLite::Database* m_db, const std::string& sqlScript, const std::string& dbName);
-    bool ejecutarSchema(const std::string& sqlScript, const std::string& dbName);
-    std::unique_ptr<SQLite::Database> m_db;
+    void runSchemaFromResources();
+
+    std::unique_ptr<Db::Database> m_db;
+    QString m_applicationDirectory;
+    QString m_binaryDirectory;
+    QString m_host;
+    QString m_port;
+    QString m_databaseName;
+    QString m_username;
+    QString m_password;
+    QString m_sslMode;
+    QString m_lastError;
+    bool m_serverMode = false;
 };

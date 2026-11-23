@@ -27,7 +27,7 @@
 
 #include "ReportsEngine.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QPrinter>
 #include <QTextDocument>
 #include <QPageSize>
@@ -44,7 +44,7 @@ static QString construirEncabezadoCopropiedadHTML(const QString& tituloReporte, 
     QString razonSocial = "CONJUNTO RESIDENCIAL PROPIEDAD HORIZONTAL";
     QString nit = "900.000.000-1";
 
-    SQLite::Statement cfg(db, "SELECT razon_social, nit FROM copropiedad_config WHERE id = 1");
+    Db::Statement cfg(db, "SELECT razon_social, nit FROM copropiedad_config WHERE id = 1");
     if (cfg.executeStep()) {
         razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
         nit = QString::fromStdString(cfg.getColumn(1).getString());
@@ -66,7 +66,7 @@ static QString construirFirmasHTML() {
     QString contador = "Contador Público";
     QString revisor = "";
 
-    SQLite::Statement cfg(db, R"(
+    Db::Statement cfg(db, R"(
         SELECT representante_legal,
                COALESCE(contador_nombre || ' (TP ' || contador_tp || ')', 'Contador Público'),
                COALESCE(revisor_fiscal_nombre || ' (TP ' || revisor_fiscal_tp || ')', '')
@@ -98,26 +98,25 @@ std::vector<CarteraEdadItem> ReportsEngine::generarCarteraPorEdades(const std::s
     auto& db = DatabaseManager::instance().getDb();
     std::vector<CarteraEdadItem> lista;
 
-    // julianday(?) - julianday(c.fecha_vencimiento) calcula los días exactos de mora
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT
             u.id,
             COALESCE(u.torre_bloque, ''),
             u.nomenclatura,
             t.nombre_razon_social,
-            COALESCE(SUM(CASE WHEN (julianday(?) - julianday(c.fecha_vencimiento)) <= 30 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_0_30,
-            COALESCE(SUM(CASE WHEN (julianday(?) - julianday(c.fecha_vencimiento)) BETWEEN 31 AND 60 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_31_60,
-            COALESCE(SUM(CASE WHEN (julianday(?) - julianday(c.fecha_vencimiento)) BETWEEN 61 AND 90 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_61_90,
-            COALESCE(SUM(CASE WHEN (julianday(?) - julianday(c.fecha_vencimiento)) > 90 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_90_mas,
+            COALESCE(SUM(CASE WHEN (CAST(? AS date) - CAST(c.fecha_vencimiento AS date)) <= 30 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_0_30,
+            COALESCE(SUM(CASE WHEN (CAST(? AS date) - CAST(c.fecha_vencimiento AS date)) BETWEEN 31 AND 60 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_31_60,
+            COALESCE(SUM(CASE WHEN (CAST(? AS date) - CAST(c.fecha_vencimiento AS date)) BETWEEN 61 AND 90 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_61_90,
+            COALESCE(SUM(CASE WHEN (CAST(? AS date) - CAST(c.fecha_vencimiento AS date)) > 90 THEN c.saldo_pendiente ELSE 0 END), 0) AS d_90_mas,
             COALESCE(SUM(c.saldo_pendiente), 0) AS total
         FROM unidades_privadas u
         INNER JOIN terceros t ON u.propietario_principal_id = t.id
         INNER JOIN cuentas_cobro c ON u.id = c.unidad_id
         WHERE c.estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
           AND c.saldo_pendiente > 0
-          AND c.fecha_emision <= ?
+          AND CAST(c.fecha_emision AS date) <= CAST(? AS date)
         GROUP BY u.id, u.torre_bloque, u.nomenclatura, t.nombre_razon_social
-        HAVING total > 0
+        HAVING COALESCE(SUM(c.saldo_pendiente), 0) > 0
         ORDER BY total DESC, u.nomenclatura ASC
     )");
 
@@ -149,7 +148,7 @@ EstadoResultadosResumen ReportsEngine::generarEstadoResultados(const std::string
     auto& db = DatabaseManager::instance().getDb();
     EstadoResultadosResumen er;
 
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT
             p.codigo,
             p.nombre,
@@ -164,7 +163,7 @@ EstadoResultadosResumen ReportsEngine::generarEstadoResultados(const std::string
           AND c.estado = 'CONTABILIZADO'
           AND c.fecha BETWEEN ? AND ?
         GROUP BY p.codigo, p.nombre, p.clase, p.naturaleza
-        HAVING deb > 0 OR cred > 0
+        HAVING COALESCE(SUM(m.debito), 0) > 0 OR COALESCE(SUM(m.credito), 0) > 0
         ORDER BY p.codigo ASC
     )");
 
@@ -198,7 +197,7 @@ BalanceGeneralResumen ReportsEngine::generarBalanceGeneral(const std::string& fe
     auto& db = DatabaseManager::instance().getDb();
     BalanceGeneralResumen bg;
 
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT
             p.codigo,
             p.nombre,
@@ -213,7 +212,7 @@ BalanceGeneralResumen ReportsEngine::generarBalanceGeneral(const std::string& fe
           AND c.estado = 'CONTABILIZADO'
           AND c.fecha <= ?
         GROUP BY p.codigo, p.nombre, p.clase, p.naturaleza
-        HAVING deb != cred
+        HAVING COALESCE(SUM(m.debito), 0) <> COALESCE(SUM(m.credito), 0)
         ORDER BY p.codigo ASC
     )");
 

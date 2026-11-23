@@ -40,7 +40,10 @@
 #include "ui/AsambleasWidget.hpp"
 #include "ui/UsuariosAuditoriaWidget.hpp"
 #include "ui/ConfiguracionWidget.hpp"
+#include "ui/PermisosPaginasWidget.hpp"
+#include "ui/PucCuentasWidget.hpp"
 #include "ui/VerticalTabStyle.hpp"
+#include "core/PermisosPaginasRepository.hpp"
 #include <QStatusBar>
 #include <QToolBar>
 #include <QPushButton>
@@ -50,13 +53,13 @@
 #include <QCloseEvent>
 #include <QTimer>
 
+#include <exception>
+#include <unordered_map>
 
-MainWindow::MainWindow(const UsuarioSesion& sesion,
-                       const std::string& rutaDb,
-                       QWidget* parent)
-    : QMainWindow(parent), m_sesion(sesion), m_rutaDb(rutaDb) {
+MainWindow::MainWindow(const UsuarioSesion& sesion, QWidget* parent)
+    : QMainWindow(parent), m_sesion(sesion) {
     setupUi();
-    aplicarPermisosPorRol();
+    aplicarPermisosPorPagina();
 }
 
 void MainWindow::setupUi() {
@@ -64,7 +67,7 @@ void MainWindow::setupUi() {
     // Cargar nombre de la copropiedad en el título de la ventana
     QString nombreCopropiedad = "Administración Propiedad Horizontal";
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement q(db, "SELECT razon_social, orientacion_menu FROM copropiedad_config WHERE id = 1");
+    Db::Statement q(db, "SELECT razon_social, orientacion_menu FROM copropiedad_config WHERE id = 1");
     if (q.executeStep()) {
         nombreCopropiedad = QString::fromStdString(q.getColumn(0).getString());
         orientacion = q.getColumn(1).getInt();
@@ -125,7 +128,11 @@ void MainWindow::setupUi() {
     m_tabReportes         = new ReportesWidget(this);
     m_tabAsambleas        = new AsambleasWidget(m_sesion.id, this);
     m_tabSeguridad        = new UsuariosAuditoriaWidget(m_sesion, this);
-    m_tabConfig           = new ConfiguracionWidget(m_sesion, m_rutaDb, this);
+    m_tabConfig           = new ConfiguracionWidget(m_sesion, this);
+    m_tabCuentasContables = new PucCuentasWidget(m_sesion.id, this);
+    if (PermisosPaginasRepository::puedeGestionarPermisos(m_sesion.id)) {
+        m_tabPermisosPaginas = new PermisosPaginasWidget(m_sesion.id, this);
+    }
 
     // --- SINCRONIZACIÓN EN TIEMPO REAL ENTRE MÓDULOS ---
     // 1. Al crear/editar terceros, actualizar combos en Unidades y Egresos
@@ -170,20 +177,42 @@ void MainWindow::setupUi() {
         setWindowTitle(nuevoNombre + " - Sistema de Gestión PH");
     });
 
-    // Registrar pestañas en orden lógico de operación
-    m_tabs->addTab(m_tabFacturasServicio, "1. Facturas Servicios");            // indice: 0
-    m_tabs->addTab(m_tabUnidades,         "2. Unidades Privadas");             // indice: 1 
-    m_tabs->addTab(m_tabTerceros,         "3. Terceros");                      // indice: 2
-    m_tabs->addTab(m_tabParqueaderos,     "4. Parqueaderos y Bodegas");        // indice: 3
-    m_tabs->addTab(m_tabFacturacion,      "5. Cuentas de Cobro");              // indice: 4
-    m_tabs->addTab(m_tabRecaudo,          "6. Recaudo y Paz y Salvos");        // indice: 5
-    m_tabs->addTab(m_tabEgresos,          "7. Egresos y Proveedores");         // indice: 6
-    m_tabs->addTab(m_tabPresupuesto,      "8. Presupuesto");                   // indice: 7
-    m_tabs->addTab(m_tabReportes,         "9. Reportes Financieros");          // indice: 8
-    m_tabs->addTab(m_tabAsambleas,        "10. Asambleas y Quórum");           // indice: 9
-    m_tabs->addTab(m_tabSeguridad,        "11. Usuarios y Auditoría");         // indice: 10
-    m_tabs->addTab(m_tabConceptosCobro,   "12. Conceptos cobro de servicios"); // indice: 11
-    m_tabs->addTab(m_tabConfig,           "13. Configuración");                // indice: 12
+    const std::unordered_map<std::string, QWidget*> widgetsPorPagina{
+        {"FACTURAS_SERVICIO", m_tabFacturasServicio},
+        {"UNIDADES", m_tabUnidades},
+        {"TERCEROS", m_tabTerceros},
+        {"PARQUEADEROS", m_tabParqueaderos},
+        {"FACTURACION", m_tabFacturacion},
+        {"RECAUDO", m_tabRecaudo},
+        {"EGRESOS", m_tabEgresos},
+        {"PRESUPUESTO", m_tabPresupuesto},
+        {"REPORTES", m_tabReportes},
+        {"ASAMBLEAS", m_tabAsambleas},
+        {"SEGURIDAD", m_tabSeguridad},
+        {"CONCEPTOS_COBRO", m_tabConceptosCobro},
+        {"CONFIGURACION", m_tabConfig},
+        {"CUENTAS_CONTABLES", m_tabCuentasContables},
+        {"GESTION_PERMISOS", m_tabPermisosPaginas}
+    };
+    for (const auto& pagina : PermisosPaginasRepository::obtenerCatalogoPaginas()) {
+        const auto widget = widgetsPorPagina.find(pagina.codigo);
+        if (widget == widgetsPorPagina.end()) {
+            qWarning() << "La página del catálogo no tiene un widget asociado:"
+                       << QString::fromStdString(pagina.codigo);
+            continue;
+        }
+        if (!widget->second) {
+            continue;
+        }
+        m_tabs->addTab(
+            widget->second,
+            QString("%1. %2").arg(pagina.orden).arg(QString::fromStdString(pagina.nombre))
+        );
+    }
+    if (m_tabPermisosPaginas) {
+        connect(m_tabPermisosPaginas, &PermisosPaginasWidget::configuracionActualizada,
+                this, &MainWindow::aplicarPermisosPorPagina);
+    }
 
     setCentralWidget(m_tabs);
 
@@ -197,6 +226,31 @@ void MainWindow::setupUi() {
         "QPushButton:hover { background-color: #a93226; }"
     );
     toolbar->addWidget(btnSalir);
+
+    if (DatabaseManager::instance().isServerMode()) {
+        auto* btnApagarBase = new QPushButton("⏻ Salir y apagar PostgreSQL");
+        btnApagarBase->setStyleSheet(
+            "QPushButton { background-color: #7f1d1d; color: white; font-weight: bold; "
+            "padding: 6px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #641616; }"
+        );
+        toolbar->addWidget(btnApagarBase);
+
+        connect(btnApagarBase, &QPushButton::clicked, this, [this]() {
+            const auto response = QMessageBox::warning(
+                this,
+                "Apagar PostgreSQL",
+                "Se apagará la base de datos y se desconectarán los clientes conectados. "
+                "¿Desea continuar?",
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No
+            );
+            if (response == QMessageBox::Yes) {
+                m_shutdownDatabaseOnExit = true;
+                close();
+            }
+        });
+    }
 
     // --- Salida controlada con confirmación + auditoría ---
     connect(btnSalir, &QPushButton::clicked, this, [this]() {
@@ -212,62 +266,97 @@ void MainWindow::setupUi() {
 
     // Barra de estado inferior con información de sesión
     statusBar()->showMessage(
-        QString("Usuario activo: %1 (%2)  |  Perfil: %3  |  Base de Datos: SQLite Local")
+        QString("Usuario activo: %1 (%2)  |  Perfil: %3  |  Base de Datos: PostgreSQL")
             .arg(QString::fromStdString(m_sesion.nombreCompleto))
             .arg(QString::fromStdString(m_sesion.username))
             .arg(QString::fromStdString(m_sesion.rolNombre))
     );
-/*
-    statusBar()->showMessage(
-        QString("Bienvenido %1 al Sistema de Gestión PH.")
-            .arg(QString::fromStdString(m_sesion.nombreCompleto)),
-        10000  // 5 segundos
-    );
- */
 }
 
-void MainWindow::aplicarPermisosPorRol() {
-    // Control de acceso basado en roles (RBAC)
-    // Ajusta los índices según el orden en que agregaste las pestañas
-    if (m_sesion.rolNombre == "REVISOR_FISCAL") {
-        // El Revisor Fiscal audita libros, presupuesto, reportes y logs, sin operar facturación diaria
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabFacturacion),    false); // Facturación 
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabRecaudo),        false); // Recaudo
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabEgresos),        false); // Egresos
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConfig),         false); // Configuración
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConceptosCobro), false); // Facturas de Servicios 
-        m_tabs->setCurrentIndex(m_tabs->indexOf(m_tabReportes));            // Abre directamente en Reportes Financieros 
-        // Aquí podrías deshabilitar botones de edición en cada widget
-        // (ej: unidadesTab->setSoloLectura(true))
-    } else if (m_sesion.rolNombre == "ASISTENTE") {
-        // El Asistente opera residentes, unidades, parqueaderos, recaudo y asambleas
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabEgresos),        false); // Egresos
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabPresupuesto),    false); // Presupuesto 
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabSeguridad),      false); // Usuarios y Auditoría
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConfig),         false); // Configuración
-        m_tabs->setTabEnabled(m_tabs->indexOf(m_tabConceptosCobro), false); // Facturas de Servicios
+void MainWindow::aplicarPermisosPorPagina() {
+    const std::unordered_map<std::string, QWidget*> widgetsPorPagina{
+        {"FACTURAS_SERVICIO", m_tabFacturasServicio},
+        {"UNIDADES", m_tabUnidades},
+        {"TERCEROS", m_tabTerceros},
+        {"PARQUEADEROS", m_tabParqueaderos},
+        {"FACTURACION", m_tabFacturacion},
+        {"RECAUDO", m_tabRecaudo},
+        {"EGRESOS", m_tabEgresos},
+        {"PRESUPUESTO", m_tabPresupuesto},
+        {"REPORTES", m_tabReportes},
+        {"ASAMBLEAS", m_tabAsambleas},
+        {"SEGURIDAD", m_tabSeguridad},
+        {"CONCEPTOS_COBRO", m_tabConceptosCobro},
+        {"CONFIGURACION", m_tabConfig},
+        {"CUENTAS_CONTABLES", m_tabCuentasContables},
+        {"GESTION_PERMISOS", m_tabPermisosPaginas}
+    };
+
+    try {
+        QWidget* paginaSeleccionada = m_tabs->currentWidget();
+        int posicion = 0;
+        for (const auto& pagina : PermisosPaginasRepository::obtenerCatalogoPaginas()) {
+            const auto widget = widgetsPorPagina.find(pagina.codigo);
+            if (widget == widgetsPorPagina.end()) {
+                qWarning() << "La página del catálogo no tiene un widget asociado:"
+                           << QString::fromStdString(pagina.codigo);
+                continue;
+            }
+            if (!widget->second) {
+                continue;
+            }
+
+            const int indexActual = m_tabs->indexOf(widget->second);
+            if (indexActual >= 0) {
+                const QString titulo = QString("%1. %2").arg(pagina.orden)
+                    .arg(QString::fromStdString(pagina.nombre));
+                const bool visible = m_tabs->isTabVisible(indexActual);
+                if (indexActual != posicion || m_tabs->tabText(indexActual) != titulo) {
+                    m_tabs->removeTab(indexActual);
+                    const int nuevoIndice = m_tabs->insertTab(posicion, widget->second, titulo);
+                    m_tabs->setTabVisible(nuevoIndice, visible);
+                }
+                m_tabs->setTabVisible(
+                    posicion,
+                    PermisosPaginasRepository::tieneAcceso(m_sesion.rolId, pagina.codigo));
+                ++posicion;
+            }
+        }
+        const int indiceSeleccionado = m_tabs->indexOf(paginaSeleccionada);
+        if (indiceSeleccionado >= 0 && m_tabs->isTabVisible(indiceSeleccionado)) {
+            m_tabs->setCurrentIndex(indiceSeleccionado);
+        }
+    } catch (const std::exception& error) {
+        for (const auto& [codigo, widget] : widgetsPorPagina) {
+            Q_UNUSED(codigo);
+            const int index = m_tabs->indexOf(widget);
+            if (index >= 0) {
+                m_tabs->setTabVisible(index, false);
+            }
+        }
+        if (m_tabPermisosPaginas) {
+            m_tabs->setTabVisible(m_tabs->indexOf(m_tabPermisosPaginas), false);
+        }
+        QMessageBox::critical(
+            this, "Error de permisos",
+            QString("No se pudieron cargar los permisos de páginas:\n%1")
+                .arg(QString::fromUtf8(error.what())));
     }
-    /***************
-     * Agrega más roles según necesidad, con la misma lógica de habilitar o deshabilitar
-     * pestañas y botones según permisos definidos.
-     * 
-     * A futuro, se podría implementar un sistema de permisos leyendo desde la base de datos,
-     * lo que permitiría asignar permisos más dinámicos y detallados de cada rol o usuario y
-     * no quemado en el código fuente.
-     *********************************/
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
-    auto resp = QMessageBox::question(
-        this, "Salir",
-        "¿Desea salir de la aplicación?",
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No
-    );
-
-    if (resp != QMessageBox::Yes) {
-        event->ignore();  // ← cancela el cierre
-        return;
+    if (!m_shutdownDatabaseOnExit) {
+        const auto response = QMessageBox::question(
+            this,
+            "Salir",
+            "¿Desea salir de la aplicación?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No
+        );
+        if (response != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
     }
 
     // Registrar en auditoría
@@ -275,16 +364,33 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         auto& db = DatabaseManager::instance().getDb();
         std::string ts = QDateTime::currentDateTime()
             .toString("yyyy-MM-dd HH:mm:ss").toStdString();
-        SQLite::Statement log(db, R"(
+        Db::Statement log(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
-            VALUES (?, 'PRINCIPAL', 'SALIR', 'auditoria_logs', ?, ?)
+            VALUES (?, 'PRINCIPAL', 'SALIR', 'usuarios', ?, ?)
         )");
         log.bind(1, m_sesion.id);
-        log.bind(2, "SALIDA_APLICACION");
-        log.bind(3, "[" + ts + "] - Cierre controlado de sesión");
+        log.bind(2, m_sesion.id);
+        const std::string action = m_shutdownDatabaseOnExit
+            ? "Cierre de sesión y apagado de PostgreSQL"
+            : "Cierre controlado de sesión";
+        log.bind(3, "[" + ts + "] - " + action);
         log.exec();
     } catch (const std::exception& e) {
         qWarning() << "Error al registrar salida en auditoría:" << e.what();
+    }
+
+    if (m_shutdownDatabaseOnExit) {
+        QString errorMessage;
+        if (!DatabaseManager::instance().stopLocalServer(&errorMessage)) {
+            m_shutdownDatabaseOnExit = false;
+            QMessageBox::critical(
+                this,
+                "Error al apagar PostgreSQL",
+                "No se pudo apagar la base de datos:\n" + errorMessage
+            );
+            event->ignore();
+            return;
+        }
     }
 
     event->accept();  // ← permite el cierre

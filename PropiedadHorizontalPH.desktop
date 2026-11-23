@@ -1,5 +1,4 @@
 [Desktop Entry]
-Name=PropiedadHorizontalPH
-Exec=PropiedadHorizontalPH
-Icon=PropiedadHorizontalPH
 Type=Application
+Name=PropiedadHorizontalPH
+Exec=/home/mauriciob/Proyectos/ph-manager/PropiedadHorizontal-PH/build/PropiedadHorizontalPH

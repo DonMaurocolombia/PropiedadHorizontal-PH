@@ -27,7 +27,7 @@
 
 #include "TerceroRepository.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <stdexcept>
 #include <format>
 #include <array>
@@ -66,7 +66,7 @@ std::vector<Tercero> TerceroRepository::listar(const std::string& textoBusqueda,
 
     sql += " ORDER BY nombre_razon_social ASC;";
 
-    SQLite::Statement query(db, sql);
+    Db::Statement query(db, sql);
     if (!textoBusqueda.empty()) {
         std::string pattern = "%" + textoBusqueda + "%";
         query.bind(1, pattern);
@@ -111,16 +111,16 @@ int TerceroRepository::crear(const Tercero& t, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
 
     // Verificar documento duplicado
-    SQLite::Statement checkDup(db, "SELECT COUNT(*) FROM terceros WHERE numero_documento = ?");
+    Db::Statement checkDup(db, "SELECT COUNT(*) FROM terceros WHERE numero_documento = ?");
     checkDup.bind(1, t.numeroDocumento);
     checkDup.executeStep();
     if (checkDup.getColumn(0).getInt() > 0) {
         throw std::runtime_error("Ya existe un tercero registrado con ese número de documento.");
     }
 
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
-    SQLite::Statement stmt(db, R"(
+    Db::Statement stmt(db, R"(
         INSERT INTO terceros (
             tipo_documento, numero_documento, dv, nombre_razon_social,
             telefono, celular, email, direccion_correspondencia,
@@ -146,7 +146,7 @@ int TerceroRepository::crear(const Tercero& t, int usuarioId) {
 
     int newId = static_cast<int>(db.getLastInsertRowid());
 
-    SQLite::Statement auditStmt(db, R"(
+    Db::Statement auditStmt(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'TERCEROS', 'CREAR', 'terceros', ?, ?)
     )");
@@ -171,7 +171,7 @@ void TerceroRepository::actualizar(const Tercero& t, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
 
     // Validar que el documento no pertenezca a otro registro
-    SQLite::Statement checkDup(db, "SELECT COUNT(*) FROM terceros WHERE numero_documento = ? AND id != ?");
+    Db::Statement checkDup(db, "SELECT COUNT(*) FROM terceros WHERE numero_documento = ? AND id != ?");
     checkDup.bind(1, t.numeroDocumento);
     checkDup.bind(2, t.id);
     checkDup.executeStep();
@@ -179,9 +179,9 @@ void TerceroRepository::actualizar(const Tercero& t, int usuarioId) {
         throw std::runtime_error("Otro tercero ya tiene registrado ese número de documento.");
     }
 
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
-    SQLite::Statement stmt(db, R"(
+    Db::Statement stmt(db, R"(
         UPDATE terceros SET
             tipo_documento = ?, numero_documento = ?, dv = ?, nombre_razon_social = ?,
             telefono = ?, celular = ?, email = ?, direccion_correspondencia = ?,
@@ -207,7 +207,7 @@ void TerceroRepository::actualizar(const Tercero& t, int usuarioId) {
     stmt.bind(15, t.id);
     stmt.exec();
 
-    SQLite::Statement auditStmt(db, R"(
+    Db::Statement auditStmt(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'TERCEROS', 'EDITAR', 'terceros', ?, ?)
     )");
@@ -223,7 +223,7 @@ void TerceroRepository::eliminar(int id, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
 
     // Verificar si está vinculado a unidades o movimientos contables
-    SQLite::Statement checkUnidades(db, R"(
+    Db::Statement checkUnidades(db, R"(
         SELECT COUNT(*) FROM unidades_privadas
         WHERE propietario_principal_id = ? OR inquilino_actual_id = ?
     )");
@@ -237,20 +237,20 @@ void TerceroRepository::eliminar(int id, int usuarioId) {
         );
     }
 
-    SQLite::Statement checkMovs(db, "SELECT COUNT(*) FROM movimientos_contables WHERE tercero_id = ?");
+    Db::Statement checkMovs(db, "SELECT COUNT(*) FROM movimientos_contables WHERE tercero_id = ?");
     checkMovs.bind(1, id);
     checkMovs.executeStep();
     if (checkMovs.getColumn(0).getInt() > 0) {
         throw std::runtime_error("No se puede eliminar porque tiene movimientos contables registrados.");
     }
 
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
-    SQLite::Statement delStmt(db, "DELETE FROM terceros WHERE id = ?");
+    Db::Statement delStmt(db, "DELETE FROM terceros WHERE id = ?");
     delStmt.bind(1, id);
     delStmt.exec();
 
-    SQLite::Statement auditStmt(db, R"(
+    Db::Statement auditStmt(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'TERCEROS', 'ELIMINAR', 'terceros', ?, 'Eliminación de tercero sin movimientos')
     )");

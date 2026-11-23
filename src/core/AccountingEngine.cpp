@@ -27,19 +27,20 @@
 
 #include "AccountingEngine.hpp"
 #include "DbManager.hpp"
+#include <QDate>
 #include <QDebug>
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <stdexcept>
 #include <format>
 
 int AccountingEngine::registrarComprobante(const ComprobanteRequest& req) {
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
         const int comprobanteId = registrarComprobanteEnTransaccion(req);
         transaction.commit();
         return comprobanteId;
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
         qCritical() << "Error al registrar el comprobante: " << e.what();
         return 0;
     }
@@ -63,7 +64,7 @@ int AccountingEngine::insertarComprobante(const ComprobanteRequest& req) {
     const int consecutivo = obtenerSiguienteConsecutivo(req.tipoComprobante);
     auto& db = DatabaseManager::instance().getDb();
 
-    SQLite::Statement insertComp(db, R"(
+    Db::Statement insertComp(db, R"(
         INSERT INTO comprobantes_contables (
             tipo_comprobante, consecutivo, fecha, descripcion, estado, usuario_id
         ) VALUES (?, ?, ?, ?, 'CONTABILIZADO', ?)
@@ -78,7 +79,7 @@ int AccountingEngine::insertarComprobante(const ComprobanteRequest& req) {
 
     const int comprobanteId = static_cast<int>(db.getLastInsertRowid());
 
-    SQLite::Statement insertMov(db, R"(
+    Db::Statement insertMov(db, R"(
         INSERT INTO movimientos_contables (
             comprobante_id, cuenta_codigo, tercero_id, unidad_id, detalle, debito, credito
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -103,7 +104,7 @@ int AccountingEngine::insertarComprobante(const ComprobanteRequest& req) {
         insertMov.reset();
     }
 
-    SQLite::Statement insertAudit(db, R"(
+    Db::Statement insertAudit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'CONTABILIDAD', 'CREAR', 'comprobantes_contables', ?, ?)
     )");
@@ -148,7 +149,7 @@ void AccountingEngine::validarCuentaPUC(const std::string& cuentaCodigo, int ter
     auto& db = DatabaseManager::instance().getDb();
 
     try {
-        SQLite::Statement query(db, "SELECT permite_movimiento, exige_tercero FROM puc_cuentas WHERE codigo = ?");
+        Db::Statement query(db, "SELECT permite_movimiento, exige_tercero FROM puc_cuentas WHERE codigo = ?");
         query.bind(1, cuentaCodigo);
 
         if (!query.executeStep()) {
@@ -169,7 +170,7 @@ void AccountingEngine::validarCuentaPUC(const std::string& cuentaCodigo, int ter
                 "La cuenta PUC '{}' exige un Tercero válido.", cuentaCodigo
             ));
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al validar cuenta del PUC: " << e.what();
     }
 }
@@ -179,7 +180,7 @@ int AccountingEngine::obtenerSiguienteConsecutivo(const std::string& tipoComprob
     int resp = 0;
 
     try {
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT COALESCE(MAX(consecutivo), 0) + 1
             FROM comprobantes_contables
             WHERE tipo_comprobante = ?
@@ -187,7 +188,7 @@ int AccountingEngine::obtenerSiguienteConsecutivo(const std::string& tipoComprob
         query.bind(1, tipoComprobante);
         query.executeStep();
         resp = query.getColumn(0).getInt();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
         qCritical() << "Error al obtener el siguiente consecutivo de comprobante: " << e.what();
     }
 
@@ -200,7 +201,7 @@ int AccountingEngine::anularComprobante(int comprobanteId, int usuarioId, const 
 
     try {
         // Verificar estado actual
-        SQLite::Statement checkStmt(db, "SELECT estado, tipo_comprobante, consecutivo FROM comprobantes_contables WHERE id = ?");
+        Db::Statement checkStmt(db, "SELECT estado, tipo_comprobante, consecutivo FROM comprobantes_contables WHERE id = ?");
         checkStmt.bind(1, comprobanteId);
 
         if (!checkStmt.executeStep()) {
@@ -215,7 +216,7 @@ int AccountingEngine::anularComprobante(int comprobanteId, int usuarioId, const 
         int consOrig = checkStmt.getColumn(2).getInt();
 
         // Leer movimientos originales e invertir débitos y créditos
-        SQLite::Statement movStmt(db, R"(
+        Db::Statement movStmt(db, R"(
             SELECT cuenta_codigo, tercero_id, unidad_id, detalle, debito, credito
             FROM movimientos_contables
             WHERE comprobante_id = ?
@@ -223,7 +224,7 @@ int AccountingEngine::anularComprobante(int comprobanteId, int usuarioId, const 
         movStmt.bind(1, comprobanteId);
 
         notaAnulacion.tipoComprobante = "NOTA_CONTABLE";
-        notaAnulacion.fecha = "date('now', 'localtime')"; // En producción pasar fecha actual formateada YYYY-MM-DD
+        notaAnulacion.fecha = QDate::currentDate().toString(Qt::ISODate).toStdString();
         notaAnulacion.descripcion = std::format("Anulación de {} #{}: {}", tipoOrig, consOrig, motivo);
         notaAnulacion.usuarioId = usuarioId;
 
@@ -243,10 +244,10 @@ int AccountingEngine::anularComprobante(int comprobanteId, int usuarioId, const 
         }
 
         // Marcar original como ANULADO y registrar la nota contable inversa
-        SQLite::Statement updateOrig(db, "UPDATE comprobantes_contables SET estado = 'ANULADO' WHERE id = ?");
+        Db::Statement updateOrig(db, "UPDATE comprobantes_contables SET estado = 'ANULADO' WHERE id = ?");
         updateOrig.bind(1, comprobanteId);
         updateOrig.exec();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al anular comprobante: " << e.what();
     }
 
@@ -259,7 +260,7 @@ std::vector<SaldoCuenta> AccountingEngine::obtenerBalancePrueba(const std::strin
     std::vector<SaldoCuenta> resultado;
 
     try {
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT p.codigo, p.nombre, p.clase, p.naturaleza,
                 COALESCE(SUM(m.debito), 0) AS total_debito,
                 COALESCE(SUM(m.credito), 0) AS total_credito
@@ -270,7 +271,8 @@ std::vector<SaldoCuenta> AccountingEngine::obtenerBalancePrueba(const std::strin
                 AND c.fecha BETWEEN ? AND ?
             WHERE p.permite_movimiento = 1
             GROUP BY p.codigo, p.nombre, p.clase, p.naturaleza
-            HAVING total_debito > 0 OR total_credito > 0
+            HAVING COALESCE(SUM(m.debito), 0) > 0
+                OR COALESCE(SUM(m.credito), 0) > 0
             ORDER BY p.codigo ASC
         )");
 
@@ -294,7 +296,7 @@ std::vector<SaldoCuenta> AccountingEngine::obtenerBalancePrueba(const std::strin
 
             resultado.push_back(sc);
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
         qCritical() << "Error al obtener el balance de prueba: " << e.what();
     }
 
@@ -306,7 +308,7 @@ int64_t AccountingEngine::obtenerSaldoTerceroCuenta(int terceroId, const std::st
     int64_t resp = 0;
 
     try {
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT p.naturaleza, COALESCE(SUM(m.debito), 0), COALESCE(SUM(m.credito), 0)
             FROM puc_cuentas p
             LEFT JOIN movimientos_contables m ON p.codigo = m.cuenta_codigo AND m.tercero_id = ?
@@ -324,7 +326,7 @@ int64_t AccountingEngine::obtenerSaldoTerceroCuenta(int terceroId, const std::st
         int64_t debito = query.getColumn(1).getInt64();
         int64_t credito = query.getColumn(2).getInt64();
         resp = (naturaleza == "DEBITO") ? (debito - credito) : (credito - debito);
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al registrar el comprobante: " << e.what();
     }
 

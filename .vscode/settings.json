@@ -1,0 +1,7 @@
+{
+    "C_Cpp.autocompleteAddParentheses": true,
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/vcpkg/compile_commands.json",
+    "cmake.useCMakePresets": "always",
+    "cmake.configurePreset": "development",
+    "cmake.buildPreset": "development"
+}

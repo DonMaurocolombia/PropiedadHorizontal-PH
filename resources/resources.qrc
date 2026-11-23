@@ -2,5 +2,6 @@
     <qresource prefix="/db">
         <file alias="schema.sql">../db/schema.sql</file>
         <file alias="puc_colombia.sql">../db/puc_colombia.sql</file>
+        <file alias="migrations/003_permisos_paginas.sql">../db/migrations/003_permisos_paginas.sql</file>
     </qresource>
 </RCC>

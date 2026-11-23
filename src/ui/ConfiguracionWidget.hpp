@@ -42,9 +42,7 @@ class ConfiguracionWidget : public QWidget {
     Q_OBJECT
 
 public:
-    explicit ConfiguracionWidget(const UsuarioSesion& sesion,
-                                 const std::string& rutaDbActual,
-                                 QWidget* parent = nullptr);
+    explicit ConfiguracionWidget(const UsuarioSesion& sesion, QWidget* parent = nullptr);
 
 signals:
     void configuracionActualizada(const QString& nuevaRazonSocial);
@@ -66,7 +64,6 @@ private:
     void setupUi();
 
     UsuarioSesion m_sesion;
-    std::string m_rutaDb;
 
     // Datos legales
     QLineEdit* m_txtNit = nullptr;

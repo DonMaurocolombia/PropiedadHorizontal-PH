@@ -29,7 +29,6 @@
 
 #include <QMainWindow>
 #include <QTabWidget>
-#include <string>
 #include "models/UsuarioSesion.hpp"
 #include "ui/TercerosWidget.hpp"
 #include "ui/UnidadesWidget.hpp"
@@ -44,24 +43,23 @@
 #include "ui/AsambleasWidget.hpp"
 #include "ui/UsuariosAuditoriaWidget.hpp"
 #include "ui/ConfiguracionWidget.hpp"
+#include "ui/PermisosPaginasWidget.hpp"
+#include "ui/PucCuentasWidget.hpp"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    // explicit MainWindow(const UsuarioSesion& sesion, QWidget* parent = nullptr);
-    explicit MainWindow(const UsuarioSesion& sesion,
-                        const std::string& rutaDb,
-                        QWidget* parent = nullptr);
+    explicit MainWindow(const UsuarioSesion& sesion, QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
 private:
     void setupUi();
     // void aplicarPermisos();
-    void aplicarPermisosPorRol();
+    void aplicarPermisosPorPagina();
 
     UsuarioSesion m_sesion;
-    std::string m_rutaDb;
+    bool m_shutdownDatabaseOnExit = false;
     QTabWidget* m_tabs = nullptr;
 
     TercerosWidget*          m_tabTerceros          = nullptr;
@@ -77,6 +75,8 @@ private:
     AsambleasWidget*         m_tabAsambleas         = nullptr;
     UsuariosAuditoriaWidget* m_tabSeguridad         = nullptr;
     ConfiguracionWidget*     m_tabConfig            = nullptr;
+    PucCuentasWidget*        m_tabCuentasContables  = nullptr;
+    PermisosPaginasWidget*   m_tabPermisosPaginas   = nullptr;
 
 
 protected:

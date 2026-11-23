@@ -51,7 +51,7 @@ void PdfGenerator::exportarCuentaCobroPDF(const CuentaCobroCompleta& cc,
     QString direccion = "Calle Principal # 10 - 20";
     QString telefono = "300 000 0000";
 
-    SQLite::Statement cfg(db, "SELECT razon_social, nit, direccion, COALESCE(telefono, '') FROM copropiedad_config WHERE id = 1");
+    Db::Statement cfg(db, "SELECT razon_social, nit, direccion, COALESCE(telefono, '') FROM copropiedad_config WHERE id = 1");
     if (cfg.executeStep()) {
         razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
         nitCopropiedad = QString::fromStdString(cfg.getColumn(1).getString());
@@ -196,14 +196,14 @@ void PdfGenerator::exportarPazYSalvoPDF(int unidadId, const std::string& rutaArc
     QString nit = "900.000.000-1";
     QString repLegal = "Administración";
 
-    SQLite::Statement cfg(db, "SELECT razon_social, nit, representante_legal FROM copropiedad_config WHERE id = 1");
+    Db::Statement cfg(db, "SELECT razon_social, nit, representante_legal FROM copropiedad_config WHERE id = 1");
     if (cfg.executeStep()) {
         razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
         nit = QString::fromStdString(cfg.getColumn(1).getString());
         repLegal = QString::fromStdString(cfg.getColumn(2).getString());
     }
 
-    SQLite::Statement unit(db, R"(
+    Db::Statement unit(db, R"(
         SELECT u.torre_bloque, u.nomenclatura, COALESCE(u.matricula_inmobiliaria, 'N/A'),
                t.nombre_razon_social, t.tipo_documento, t.numero_documento
         FROM unidades_privadas u

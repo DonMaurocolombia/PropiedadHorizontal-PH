@@ -27,7 +27,7 @@
 
 #include "AsambleaEngine.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QPrinter>
 #include <QTextDocument>
 #include <QPageSize>
@@ -46,9 +46,9 @@ int AsambleaEngine::crearAsamblea(const Asamblea& a, int usuarioId) {
     int newId = 0;
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO asambleas (tipo, fecha, hora_inicio, quorum_requerido, quorum_alcanzado, estado)
             VALUES (?, ?, ?, ?, 0.0, 'EN_CURSO')
         )");
@@ -60,7 +60,7 @@ int AsambleaEngine::crearAsamblea(const Asamblea& a, int usuarioId) {
 
         newId = static_cast<int>(db.getLastInsertRowid());
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'ASAMBLEAS', 'CREAR', 'asambleas', ?, ?)
         )");
@@ -70,7 +70,7 @@ int AsambleaEngine::crearAsamblea(const Asamblea& a, int usuarioId) {
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al crear asamblea: " << e.what();
     }
 
@@ -82,7 +82,7 @@ std::vector<Asamblea> AsambleaEngine::listarAsambleas() {
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement q(db, R"(
+        Db::Statement q(db, R"(
             SELECT id, tipo, fecha, hora_inicio, quorum_requerido, quorum_alcanzado, estado
             FROM asambleas
             ORDER BY id DESC
@@ -99,7 +99,7 @@ std::vector<Asamblea> AsambleaEngine::listarAsambleas() {
                 q.getColumn(6).getString()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error en el motor de asamblea: " << e.what();
     }
 
@@ -109,14 +109,14 @@ std::vector<Asamblea> AsambleaEngine::listarAsambleas() {
 void AsambleaEngine::cambiarEstadoAsamblea(int asambleaId, const std::string& nuevoEstado, int usuarioId) {
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
-        SQLite::Statement upd(db, "UPDATE asambleas SET estado = ? WHERE id = ?");
+        Db::Statement upd(db, "UPDATE asambleas SET estado = ? WHERE id = ?");
         upd.bind(1, nuevoEstado);
         upd.bind(2, asambleaId);
         upd.exec();
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'ASAMBLEAS', 'EDITAR', 'asambleas', ?, ?)
         )");
@@ -126,7 +126,7 @@ void AsambleaEngine::cambiarEstadoAsamblea(int asambleaId, const std::string& nu
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al cambiar el estado de la asamblea: " << e.what();
     }
 }
@@ -143,7 +143,7 @@ void AsambleaEngine::registrarAsistencia(
         auto& db = DatabaseManager::instance().getDb();
 
         // Validar que la asamblea no esté cerrada
-        SQLite::Statement stAsam(db, "SELECT estado FROM asambleas WHERE id = ?");
+        Db::Statement stAsam(db, "SELECT estado FROM asambleas WHERE id = ?");
         stAsam.bind(1, asambleaId);
         if (!stAsam.executeStep()) throw std::runtime_error("Asamblea no encontrada.");
         if (stAsam.getColumn(0).getString() == "CERRADA") {
@@ -151,7 +151,7 @@ void AsambleaEngine::registrarAsistencia(
         }
 
         // Validar que la unidad no haya sido registrada previamente
-        SQLite::Statement checkDup(db, "SELECT COUNT(*) FROM asamblea_asistencia WHERE asamblea_id = ? AND unidad_id = ?");
+        Db::Statement checkDup(db, "SELECT COUNT(*) FROM asamblea_asistencia WHERE asamblea_id = ? AND unidad_id = ?");
         checkDup.bind(1, asambleaId);
         checkDup.bind(2, unidadId);
         checkDup.executeStep();
@@ -160,7 +160,7 @@ void AsambleaEngine::registrarAsistencia(
         }
 
         // Obtener coeficiente de la unidad privada
-        SQLite::Statement unitStmt(db, "SELECT coeficiente, nomenclatura FROM unidades_privadas WHERE id = ? AND estado = 'ACTIVA'");
+        Db::Statement unitStmt(db, "SELECT coeficiente, nomenclatura FROM unidades_privadas WHERE id = ? AND estado = 'ACTIVA'");
         unitStmt.bind(1, unidadId);
         if (!unitStmt.executeStep()) {
             throw std::runtime_error("La unidad privada no existe o no está ACTIVA.");
@@ -168,9 +168,9 @@ void AsambleaEngine::registrarAsistencia(
         double coeficiente = unitStmt.getColumn(0).getDouble();
         std::string nomenclatura = unitStmt.getColumn(1).getString();
 
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO asamblea_asistencia (
                 asamblea_id, unidad_id, asistente_nombre, es_apoderado,
                 coeficiente_representado, hora_registro
@@ -184,7 +184,7 @@ void AsambleaEngine::registrarAsistencia(
         ins.exec();
 
         // Recalcular suma total de coeficientes en la asamblea
-        SQLite::Statement updQuorum(db, R"(
+        Db::Statement updQuorum(db, R"(
             UPDATE asambleas
             SET quorum_alcanzado = COALESCE((
                 SELECT SUM(coeficiente_representado) FROM asamblea_asistencia WHERE asamblea_id = ?
@@ -195,7 +195,7 @@ void AsambleaEngine::registrarAsistencia(
         updQuorum.bind(2, asambleaId);
         updQuorum.exec();
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'ASAMBLEAS', 'CREAR', 'asamblea_asistencia', ?, ?)
         )");
@@ -206,7 +206,7 @@ void AsambleaEngine::registrarAsistencia(
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al registrar asistencia: " << e.what();
     }
 }
@@ -215,18 +215,18 @@ void AsambleaEngine::eliminarAsistencia(int asistenciaId, int usuarioId) {
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement getStmt(db, "SELECT asamblea_id FROM asamblea_asistencia WHERE id = ?");
+        Db::Statement getStmt(db, "SELECT asamblea_id FROM asamblea_asistencia WHERE id = ?");
         getStmt.bind(1, asistenciaId);
         if (!getStmt.executeStep()) return;
         int asambleaId = getStmt.getColumn(0).getInt();
 
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
-        SQLite::Statement del(db, "DELETE FROM asamblea_asistencia WHERE id = ?");
+        Db::Statement del(db, "DELETE FROM asamblea_asistencia WHERE id = ?");
         del.bind(1, asistenciaId);
         del.exec();
 
-        SQLite::Statement updQuorum(db, R"(
+        Db::Statement updQuorum(db, R"(
             UPDATE asambleas
             SET quorum_alcanzado = COALESCE((
                 SELECT SUM(coeficiente_representado) FROM asamblea_asistencia WHERE asamblea_id = ?
@@ -237,7 +237,7 @@ void AsambleaEngine::eliminarAsistencia(int asistenciaId, int usuarioId) {
         updQuorum.bind(2, asambleaId);
         updQuorum.exec();
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'ASAMBLEAS', 'ELIMINAR', 'asamblea_asistencia', ?, 'Retiro de unidad del quórum')
         )");
@@ -246,7 +246,7 @@ void AsambleaEngine::eliminarAsistencia(int asistenciaId, int usuarioId) {
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al eliminar asistencia: " << e.what();
     }
 }
@@ -256,7 +256,7 @@ std::vector<AsistenciaItem> AsambleaEngine::listarAsistencia(int asambleaId) {
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement q(db, R"(
+        Db::Statement q(db, R"(
             SELECT
                 a.id, a.asamblea_id, a.unidad_id, COALESCE(u.torre_bloque, ''),
                 u.nomenclatura, t.nombre_razon_social, a.asistente_nombre,
@@ -283,7 +283,7 @@ std::vector<AsistenciaItem> AsambleaEngine::listarAsistencia(int asambleaId) {
                 q.getColumn(9).getString()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar asistencia: " << e.what();
     }
 
@@ -298,13 +298,13 @@ void AsambleaEngine::exportarPlanillaQuorumPDF(int asambleaId, const std::string
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement cfg(db, "SELECT razon_social, nit FROM copropiedad_config WHERE id = 1");
+        Db::Statement cfg(db, "SELECT razon_social, nit FROM copropiedad_config WHERE id = 1");
         if (cfg.executeStep()) {
             razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
             nit = QString::fromStdString(cfg.getColumn(1).getString());
         }
 
-        SQLite::Statement asam(db, R"(
+        Db::Statement asam(db, R"(
             SELECT tipo, fecha, hora_inicio, quorum_requerido, quorum_alcanzado, estado
             FROM asambleas WHERE id = ?
         )");
@@ -317,7 +317,7 @@ void AsambleaEngine::exportarPlanillaQuorumPDF(int asambleaId, const std::string
         reqPct = asam.getColumn(3).getDouble() * 100.0;
         alcPct = asam.getColumn(4).getDouble() * 100.0;
         estado = QString::fromStdString(asam.getColumn(5).getString());
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al exportar planilla de quorum a PDF: " << e.what();
        return;
     }

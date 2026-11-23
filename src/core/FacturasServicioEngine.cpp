@@ -5,7 +5,7 @@
 
 #include "AccountingEngine.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <algorithm>
 #include <chrono>
 #include <format>
@@ -47,7 +47,7 @@ std::string categoriaServicio(const std::string& codigoConcepto) {
 
 void registrarAuditoria(int usuarioId, const std::string& accion, int facturaId, const std::string& detalle) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (
             usuario_id, modulo, accion, tabla_afectada, registro_id, detalle
         ) VALUES (?, 'FACTURACION_SERVICIOS', ?, 'facturas_servicio', ?, ?)
@@ -81,7 +81,7 @@ int FacturasServicioEngine::crearBorrador(
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement cliente(
+    Db::Statement cliente(
         db, "SELECT activo, es_propietario, es_inquilino, es_residente, es_visitante "
             "FROM terceros WHERE id = ?"
     );
@@ -95,7 +95,7 @@ int FacturasServicioEngine::crearBorrador(
         throw std::invalid_argument("El responsable debe ser un tercero activo registrado como propietario, residente o visitante.");
     }
 
-    SQLite::Statement concepto(db, R"(
+    Db::Statement concepto(db, R"(
         SELECT codigo
         FROM conceptos_cobro
         WHERE id = ? AND tipo_concepto = 'SERVICIO'
@@ -110,7 +110,7 @@ int FacturasServicioEngine::crearBorrador(
         throw std::invalid_argument("Debe indicar la placa del vehículo para cobrar el servicio de parqueadero.");
     }
 
-    SQLite::Statement unidad(db, "SELECT estado FROM unidades_privadas WHERE id = ?");
+    Db::Statement unidad(db, "SELECT estado FROM unidades_privadas WHERE id = ?");
     unidad.bind(1, unidadVisitadaId);
     if (!unidad.executeStep() || unidad.getColumn(0).getString() != "ACTIVA") {
         throw std::invalid_argument("La unidad privada visitada no existe o no está activa.");
@@ -134,8 +134,8 @@ int FacturasServicioEngine::crearBorrador(
     }
     const int64_t total = subtotal + ivaTotal;
 
-    SQLite::Transaction transaction(db);
-    SQLite::Statement insertar(db, R"(
+    Db::Transaction transaction(db);
+    Db::Statement insertar(db, R"(
         INSERT INTO facturas_servicio (
             tercero_id, fecha_emision, fecha_vencimiento,
             subtotal_cop, iva_total_cop, total_cop, usuario_id
@@ -151,7 +151,7 @@ int FacturasServicioEngine::crearBorrador(
     insertar.exec();
     const int id = static_cast<int>(db.getLastInsertRowid());
 
-    SQLite::Statement contexto(db, R"(
+    Db::Statement contexto(db, R"(
         INSERT INTO facturas_servicio_contexto (
             factura_id, unidad_visitada_id, tipo_servicio, placa_vehiculo
         ) VALUES (?, ?, ?, ?)
@@ -162,7 +162,7 @@ int FacturasServicioEngine::crearBorrador(
     contexto.bind(4, placaVehiculo);
     contexto.exec();
 
-    SQLite::Statement cobro(db, R"(
+    Db::Statement cobro(db, R"(
         INSERT INTO facturas_servicio_cobro (factura_id, concepto_id, estado)
         VALUES (?, ?, 'BORRADOR')
     )");
@@ -170,7 +170,7 @@ int FacturasServicioEngine::crearBorrador(
     cobro.bind(2, conceptoId);
     cobro.exec();
 
-    SQLite::Statement insertarLinea(db, R"(
+    Db::Statement insertarLinea(db, R"(
         INSERT INTO facturas_servicio_detalle (
             factura_id, descripcion, valor_base_cop,
             iva_tasa_puntos_base, iva_cop
@@ -211,14 +211,14 @@ void FacturasServicioEngine::confirmarPago(int facturaId,
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
     int terceroId = 0;
     int64_t valor = 0;
     int unidadId = 0;
     std::string cuentaIngreso;
     std::string nombreConcepto;
     {
-        SQLite::Statement factura(db, R"(
+        Db::Statement factura(db, R"(
             SELECT f.tercero_id, f.total_cop, ctx.unidad_visitada_id,
                    cob.estado, con.cuenta_ingreso_codigo, con.nombre
             FROM facturas_servicio f
@@ -243,7 +243,7 @@ void FacturasServicioEngine::confirmarPago(int facturaId,
         nombreConcepto = factura.getColumn(5).getString();
     }
 
-    SQLite::Statement cuentaPago(db, R"(
+    Db::Statement cuentaPago(db, R"(
         SELECT clase, naturaleza, permite_movimiento
         FROM puc_cuentas WHERE codigo = ?
     )");
@@ -277,7 +277,7 @@ void FacturasServicioEngine::confirmarPago(int facturaId,
         throw std::runtime_error("No se pudo contabilizar el pago de la factura de servicio.");
     }
 
-    SQLite::Statement pago(db, R"(
+    Db::Statement pago(db, R"(
         INSERT INTO facturas_servicio_pagos (
             factura_id, numero_recibo, fecha_pago, forma_pago,
             cuenta_banco_codigo, referencia_bancaria, valor_pagado,
@@ -295,7 +295,7 @@ void FacturasServicioEngine::confirmarPago(int facturaId,
     pago.bind(9, usuarioId);
     pago.exec();
 
-    SQLite::Statement actualizar(db, R"(
+    Db::Statement actualizar(db, R"(
         UPDATE facturas_servicio_cobro
         SET estado = 'PAGADA', comprobante_contable_id = ?
         WHERE factura_id = ? AND estado = 'BORRADOR'
@@ -317,8 +317,8 @@ void FacturasServicioEngine::asignarProximaCuenta(int facturaId, int usuarioId) 
         throw std::invalid_argument("Borrador o usuario inválido.");
     }
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
-    SQLite::Statement asignar(db, R"(
+    Db::Transaction transaction(db);
+    Db::Statement asignar(db, R"(
         UPDATE facturas_servicio_cobro
         SET estado = 'POR_COBRAR_UNIDAD'
         WHERE factura_id = ? AND estado = 'BORRADOR'
@@ -343,7 +343,7 @@ void FacturasServicioEngine::asignarProximaCuenta(int facturaId, int usuarioId) 
 
 std::vector<FacturaServicioBorrador> FacturasServicioEngine::listarBorradores() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement consulta(db, R"(
+    Db::Statement consulta(db, R"(
         SELECT f.id, f.tercero_id, t.nombre_razon_social, t.tipo_documento,
                t.numero_documento, c.tipo_servicio, c.unidad_visitada_id,
                COALESCE(u.nomenclatura, ''), COALESCE(c.placa_vehiculo, ''),

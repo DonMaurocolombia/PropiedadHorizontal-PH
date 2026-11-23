@@ -1,0 +1,54 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "vcpkg: Descargar y preparar",
+			"command": "sh",
+			"args": [
+				"${workspaceFolder}/scripts/bootstrap-vcpkg.sh"
+			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-File",
+					"${workspaceFolder}/scripts/bootstrap-vcpkg.ps1"
+				]
+			},
+			"problemMatcher": []
+		},
+		{
+			"type": "shell",
+			"label": "CMake: Configurar con vcpkg",
+			"command": "cmake",
+			"args": [
+				"--preset",
+				"development"
+			],
+			"group": {
+				"kind": "build"
+			},
+			"dependsOn": "vcpkg: Descargar y preparar",
+			"problemMatcher": []
+		},
+		{
+			"type": "shell",
+			"label": "CMake: Compilar con vcpkg",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"--preset",
+				"development"
+			],
+			"dependsOn": "CMake: Configurar con vcpkg",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": []
+		}
+	]
+}

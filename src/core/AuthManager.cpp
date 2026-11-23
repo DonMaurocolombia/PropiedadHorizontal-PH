@@ -27,7 +27,7 @@
 
 #include "AuthManager.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QCryptographicHash>
 #include <QRandomGenerator>
 #include <QByteArray>
@@ -76,14 +76,14 @@ void AuthManager::asegurarUsuarioAdminInicial() {
         contrasenaSystemInicial();
 
         // Buscar ID del rol ADMIN
-        SQLite::Statement rolStmt(db, "SELECT id FROM roles WHERE nombre = 'ADMIN';");
+        Db::Statement rolStmt(db, "SELECT id FROM roles WHERE nombre = 'ADMIN';");
         int rolAdminId = 1;
         if (rolStmt.executeStep()) {
             rolAdminId = rolStmt.getColumn(0).getInt();
         }
 
         //std::string hashInicial = generarPasswordHash("Admin123*");
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO usuarios (rol_id, username, password_hash, nombre_completo, email, activo)
             VALUES (?, 'admin', ?, 'Administrador Principal', 'admin@copropiedad.local', 1)
         )");
@@ -91,7 +91,7 @@ void AuthManager::asegurarUsuarioAdminInicial() {
         // ins.bind(2, hashInicial);
         ins.bind(2, generarPasswordHash("Admin123*"));
         ins.exec();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error asegurando usuario Admin inicial: " << e.what();
     }
 }
@@ -100,13 +100,13 @@ void AuthManager::contrasenaSystemInicial() {
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             UPDATE usuarios SET password_hash = ? WHERE id = ?
         )");
         ins.bind(1, generarPasswordHash("S1ST3M&*!123*"));
         ins.bind(2, 0);
         ins.exec();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al cambiar la contrasena System inicial: " << e.what();
     }
 }
@@ -119,7 +119,7 @@ std::optional<UsuarioSesion> AuthManager::iniciarSesion(
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT u.id, u.username, u.password_hash, u.nombre_completo, COALESCE(u.email, ''),
                 u.rol_id, r.nombre, u.activo
             FROM usuarios u
@@ -151,18 +151,20 @@ std::optional<UsuarioSesion> AuthManager::iniciarSesion(
         sesion.activo = true;
 
         // Actualizar fecha de último acceso y registrar ingreso en auditoría
-        SQLite::Statement upd(db, "UPDATE usuarios SET ultimo_acceso = datetime('now', 'localtime') WHERE id = ?");
+        Db::Statement upd(
+            db, "UPDATE usuarios SET ultimo_acceso = CURRENT_TIMESTAMP::text WHERE id = ?"
+        );
         upd.bind(1, sesion.id);
         upd.exec();
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'SEGURIDAD', 'LOGIN', 'usuarios', ?, 'Inicio de sesión exitoso')
         )");
         audit.bind(1, sesion.id);
         audit.bind(2, sesion.id);
         audit.exec();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al iniciar sesion: " << e.what();
     }
 
@@ -175,7 +177,7 @@ std::vector<UsuarioSesion> AuthManager::listarUsuarios() {
     try{
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT u.id, u.username, u.nombre_completo, COALESCE(u.email, ''),
                 u.rol_id, r.nombre, u.activo, COALESCE(u.ultimo_acceso, 'Nunca')
             FROM usuarios u
@@ -196,7 +198,7 @@ std::vector<UsuarioSesion> AuthManager::listarUsuarios() {
             u.ultimoAcceso = query.getColumn(7).getString();
             lista.push_back(u);
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar usuarios: " << e.what();
     }
 
@@ -215,17 +217,17 @@ int AuthManager::crearUsuario(const UsuarioSesion& user, const std::string& pass
     int newId;
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement checkDup(db, "SELECT COUNT(*) FROM usuarios WHERE username = ?");
+        Db::Statement checkDup(db, "SELECT COUNT(*) FROM usuarios WHERE username = ?");
         checkDup.bind(1, user.username);
         checkDup.executeStep();
         if (checkDup.getColumn(0).getInt() > 0) {
             throw std::runtime_error("El nombre de usuario ya está en uso.");
         }
 
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
         std::string hash = generarPasswordHash(password);
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO usuarios (rol_id, username, password_hash, nombre_completo, email, activo)
             VALUES (?, ?, ?, ?, ?, ?)
         )");
@@ -239,7 +241,7 @@ int AuthManager::crearUsuario(const UsuarioSesion& user, const std::string& pass
 
         newId = static_cast<int>(db.getLastInsertRowid());
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'SEGURIDAD', 'CREAR', 'usuarios', ?, ?)
         )");
@@ -249,7 +251,7 @@ int AuthManager::crearUsuario(const UsuarioSesion& user, const std::string& pass
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al crear usuario: " << e.what();
     }
 
@@ -267,14 +269,14 @@ void AuthManager::actualizarUsuario(const UsuarioSesion& user, const std::string
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
         if (!nuevaPasswordOpcional.empty()) {
             if (nuevaPasswordOpcional.size() < 6) {
                 throw std::runtime_error("La nueva contraseña debe tener al menos 6 caracteres.");
             }
             std::string hash = generarPasswordHash(nuevaPasswordOpcional);
-            SQLite::Statement upd(db, R"(
+            Db::Statement upd(db, R"(
                 UPDATE usuarios
                 SET rol_id = ?, nombre_completo = ?, email = ?, activo = ?, password_hash = ?
                 WHERE id = ?
@@ -287,7 +289,7 @@ void AuthManager::actualizarUsuario(const UsuarioSesion& user, const std::string
             upd.bind(6, user.id);
             upd.exec();
         } else {
-            SQLite::Statement upd(db, R"(
+            Db::Statement upd(db, R"(
                 UPDATE usuarios
                 SET rol_id = ?, nombre_completo = ?, email = ?, activo = ?
                 WHERE id = ?
@@ -300,7 +302,7 @@ void AuthManager::actualizarUsuario(const UsuarioSesion& user, const std::string
             upd.exec();
         }
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'SEGURIDAD', 'EDITAR', 'usuarios', ?, ?)
         )");
@@ -310,7 +312,7 @@ void AuthManager::actualizarUsuario(const UsuarioSesion& user, const std::string
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al actualizar usuario: " << e.what();
     }
 }
@@ -333,7 +335,7 @@ std::vector<AuditoriaLogItem> AuthManager::listarAuditoria(const std::string& fi
         }
         sql += " ORDER BY a.id DESC LIMIT ?;";
 
-        SQLite::Statement query(db, sql);
+        Db::Statement query(db, sql);
         int paramIdx = 1;
         if (filtroModulo != "TODOS") {
             query.bind(paramIdx++, filtroModulo);
@@ -352,7 +354,7 @@ std::vector<AuditoriaLogItem> AuthManager::listarAuditoria(const std::string& fi
                 query.getColumn(7).getString()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar auditoria: " << e.what();
     }
 

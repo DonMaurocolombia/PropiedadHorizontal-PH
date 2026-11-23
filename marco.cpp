@@ -26,7 +26,7 @@
 
 /*
     try {
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al registrar el comprobante: " << e.what();
     }
 

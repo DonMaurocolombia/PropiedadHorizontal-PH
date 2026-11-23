@@ -162,3 +162,25 @@ Este documento establece lineamientos iniciales de seguridad.
 
 No representa todavía una implementación técnica ni una matriz definitiva de permisos. Las decisiones deberán consolidarse durante el diseño de arquitectura y el análisis funcional del MVP.
 
+## 12. Permisos de páginas implementados
+
+La aplicación mantiene un catálogo de páginas y una matriz de acceso por perfil
+en `paginas_aplicacion` y `roles_permisos_pagina`. El acceso se aplica a las
+pestañas de la ventana principal; los permisos específicos de las acciones
+dentro de cada módulo siguen siendo responsabilidad de sus validaciones. El
+campo `orden` define la posición de las pestañas y el orden de la lista de
+permisos. En **Permisos por perfil**, los botones **Subir** y **Bajar** permiten
+reordenar las páginas; **Guardar orden** persiste la nueva secuencia en una
+transacción y actualiza la navegación abierta inmediatamente.
+
+El perfil `ADMIN` conserva acceso a todas las páginas y no puede modificarse
+desde el módulo. Inicialmente, solo `ADMIN` tiene acceso a **Permisos por
+perfil**. Desde allí puede habilitar dicha página para otro perfil; ese perfil
+podrá administrar los permisos de los demás perfiles, pero no los de `ADMIN`.
+También puede modificar o retirar el permiso de su propio perfil. Los cambios
+se guardan inmediatamente y se registran en auditoría.
+
+La migración `003_permisos_paginas.sql` instala el catálogo y asigna los
+permisos predeterminados en bases existentes. Los mismos valores iniciales se
+incluyen en los scripts de creación y población de una base nueva.
+

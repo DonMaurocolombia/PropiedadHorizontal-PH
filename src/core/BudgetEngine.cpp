@@ -27,7 +27,7 @@
 
 #include "BudgetEngine.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QPrinter>
 #include <QTextDocument>
 #include <QPageSize>
@@ -59,16 +59,16 @@ int BudgetEngine::crearPresupuestoAnual(const PresupuestoEncabezado& pres, int u
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement check(db, "SELECT COUNT(*) FROM presupuestos WHERE anio = ?");
+        Db::Statement check(db, "SELECT COUNT(*) FROM presupuestos WHERE anio = ?");
         check.bind(1, pres.anio);
         check.executeStep();
         if (check.getColumn(0).getInt() > 0) {
             throw std::runtime_error(std::format("Ya existe un presupuesto creado para el año {}.", pres.anio));
         }
 
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO presupuestos (
                 anio, fecha_aprobacion_asamblea, acta_asamblea_numero,
                 valor_total_anual, porcentaje_fondo_imprevistos, estado
@@ -82,7 +82,7 @@ int BudgetEngine::crearPresupuestoAnual(const PresupuestoEncabezado& pres, int u
 
         newId = static_cast<int>(db.getLastInsertRowid());
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'PRESUPUESTO', 'CREAR', 'presupuestos', ?, ?)
         )");
@@ -92,7 +92,7 @@ int BudgetEngine::crearPresupuestoAnual(const PresupuestoEncabezado& pres, int u
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al crear el presupuesto anual: " << e.what();
     }
 
@@ -105,7 +105,7 @@ std::vector<PresupuestoEncabezado> BudgetEngine::listarPresupuestos() {
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement q(db, R"(
+        Db::Statement q(db, R"(
             SELECT id, anio, fecha_aprobacion_asamblea, COALESCE(acta_asamblea_numero, ''),
                 valor_total_anual, porcentaje_fondo_imprevistos, estado
             FROM presupuestos
@@ -123,7 +123,7 @@ std::vector<PresupuestoEncabezado> BudgetEngine::listarPresupuestos() {
                 q.getColumn(6).getString()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar presupuestos: " << e.what();
     }
 
@@ -150,18 +150,18 @@ void BudgetEngine::guardarRubroPresupuesto(int presupuestoId,
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
         int64_t valorMensual = std::llround(static_cast<double>(valorAnualAprobado) / 12.0);
 
         // Verificar si ya existe esa cuenta en este presupuesto para actualizarla o insertarla
-        SQLite::Statement check(db, "SELECT id FROM presupuesto_rubros WHERE presupuesto_id = ? AND cuenta_codigo = ?");
+        Db::Statement check(db, "SELECT id FROM presupuesto_rubros WHERE presupuesto_id = ? AND cuenta_codigo = ?");
         check.bind(1, presupuestoId);
         check.bind(2, cuentaCodigo);
 
         if (check.executeStep()) {
             int rubroId = check.getColumn(0).getInt();
-            SQLite::Statement upd(db, R"(
+            Db::Statement upd(db, R"(
                 UPDATE presupuesto_rubros
                 SET nombre_rubro = ?, tipo = ?, valor_anual_aprobado = ?, valor_mensual_proyectado = ?
                 WHERE id = ?
@@ -173,7 +173,7 @@ void BudgetEngine::guardarRubroPresupuesto(int presupuestoId,
             upd.bind(5, rubroId);
             upd.exec();
         } else {
-            SQLite::Statement ins(db, R"(
+            Db::Statement ins(db, R"(
                 INSERT INTO presupuesto_rubros (
                     presupuesto_id, cuenta_codigo, nombre_rubro, tipo,
                     valor_anual_aprobado, valor_mensual_proyectado
@@ -189,7 +189,7 @@ void BudgetEngine::guardarRubroPresupuesto(int presupuestoId,
         }
 
         // Recalcular el valor_total_anual de gastos + fondo de imprevistos del encabezado
-        SQLite::Statement updTotal(db, R"(
+        Db::Statement updTotal(db, R"(
             UPDATE presupuestos
             SET valor_total_anual = COALESCE((
                 SELECT SUM(valor_anual_aprobado)
@@ -202,7 +202,7 @@ void BudgetEngine::guardarRubroPresupuesto(int presupuestoId,
         updTotal.bind(2, presupuestoId);
         updTotal.exec();
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'PRESUPUESTO', 'EDITAR', 'presupuesto_rubros', ?, ?)
         )");
@@ -212,7 +212,7 @@ void BudgetEngine::guardarRubroPresupuesto(int presupuestoId,
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al guardar rubro del presupuesto: " << e.what();
     }
 }
@@ -221,18 +221,18 @@ void BudgetEngine::eliminarRubro(int rubroId, int usuarioId) {
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement getPres(db, "SELECT presupuesto_id FROM presupuesto_rubros WHERE id = ?");
+        Db::Statement getPres(db, "SELECT presupuesto_id FROM presupuesto_rubros WHERE id = ?");
         getPres.bind(1, rubroId);
         if (!getPres.executeStep()) return;
         int presupuestoId = getPres.getColumn(0).getInt();
 
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
-        SQLite::Statement del(db, "DELETE FROM presupuesto_rubros WHERE id = ?");
+        Db::Statement del(db, "DELETE FROM presupuesto_rubros WHERE id = ?");
         del.bind(1, rubroId);
         del.exec();
 
-        SQLite::Statement updTotal(db, R"(
+        Db::Statement updTotal(db, R"(
             UPDATE presupuestos
             SET valor_total_anual = COALESCE((
                 SELECT SUM(valor_anual_aprobado)
@@ -245,7 +245,7 @@ void BudgetEngine::eliminarRubro(int rubroId, int usuarioId) {
         updTotal.bind(2, presupuestoId);
         updTotal.exec();
 
-        SQLite::Statement audit(db, R"(
+        Db::Statement audit(db, R"(
             INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
             VALUES (?, 'PRESUPUESTO', 'ELIMINAR', 'presupuesto_rubros', ?, 'Eliminación rubro presupuestal')
         )");
@@ -254,7 +254,7 @@ void BudgetEngine::eliminarRubro(int rubroId, int usuarioId) {
         audit.exec();
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al guardar rubro del presupuesto: " << e.what();
     }
 }
@@ -270,7 +270,7 @@ ResumenEjecucionPresupuestal BudgetEngine::calcularEjecucion(int presupuestoId, 
         auto& db = DatabaseManager::instance().getDb();
         res.mesCorte = mesCorte;
 
-        SQLite::Statement headStmt(db, R"(
+        Db::Statement headStmt(db, R"(
             SELECT id, anio, fecha_aprobacion_asamblea, COALESCE(acta_asamblea_numero, ''),
                 valor_total_anual, porcentaje_fondo_imprevistos, estado
             FROM presupuestos WHERE id = ?
@@ -293,7 +293,7 @@ ResumenEjecucionPresupuestal BudgetEngine::calcularEjecucion(int presupuestoId, 
         std::string fechaInicioAnio = std::format("{}-01-01", res.encabezado.anio);
         std::string fechaCorte = std::format("{}-{:02d}-31", res.encabezado.anio, mesCorte);
 
-        SQLite::Statement rubrosStmt(db, R"(
+        Db::Statement rubrosStmt(db, R"(
             SELECT r.id, r.cuenta_codigo, r.nombre_rubro, r.tipo,
                 r.valor_anual_aprobado, r.valor_mensual_proyectado, p.naturaleza
             FROM presupuesto_rubros r
@@ -304,7 +304,7 @@ ResumenEjecucionPresupuestal BudgetEngine::calcularEjecucion(int presupuestoId, 
         rubrosStmt.bind(1, presupuestoId);
 
         // Consulta preparada para obtener el movimiento real contabilizado de cada cuenta PUC en el año
-        SQLite::Statement movRealStmt(db, R"(
+        Db::Statement movRealStmt(db, R"(
             SELECT COALESCE(SUM(m.debito), 0), COALESCE(SUM(m.credito), 0)
             FROM movimientos_contables m
             INNER JOIN comprobantes_contables c ON m.comprobante_id = c.id
@@ -354,7 +354,7 @@ ResumenEjecucionPresupuestal BudgetEngine::calcularEjecucion(int presupuestoId, 
         res.porcentajeGlobalGastos = (res.totalGastosAprobados > 0)
             ? static_cast<double>(res.totalGastosEjecutados / res.totalGastosAprobados * 100.0)
             : 0.0;
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al calcular la ejecucion: " << e.what();
     }
 
@@ -370,12 +370,12 @@ void BudgetEngine::exportarEjecucionPDF(
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement cfg(db, "SELECT razon_social, nit FROM copropiedad_config WHERE id = 1");
+        Db::Statement cfg(db, "SELECT razon_social, nit FROM copropiedad_config WHERE id = 1");
         if (cfg.executeStep()) {
             razonSocial = QString::fromStdString(cfg.getColumn(0).getString());
             nit = QString::fromStdString(cfg.getColumn(1).getString());
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al exportar ejecucion a PDF: " << e.what();
        return;
     }

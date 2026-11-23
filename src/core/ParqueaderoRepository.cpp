@@ -27,7 +27,7 @@
 
 #include "ParqueaderoRepository.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <stdexcept>
 #include <format>
 #include <algorithm>
@@ -62,7 +62,7 @@ std::vector<Parqueadero> ParqueaderoRepository::listarParqueaderos(const std::st
     }
     sql += " ORDER BY p.numero ASC;";
 
-    SQLite::Statement query(db, sql);
+    Db::Statement query(db, sql);
     if (!filtro.empty()) {
         std::string pattern = "%" + filtro + "%";
         query.bind(1, pattern);
@@ -103,7 +103,7 @@ int ParqueaderoRepository::guardarParqueadero(const Parqueadero& p, int usuarioI
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
     int64_t canonEfectivo = (p.tipoTenencia == "COMUN_ALQUILER") ? p.canonMensual : 0;
     double coefEfectivo = (p.tipoTenencia == "PRIVADO") ? p.coeficiente : 0.0;
@@ -113,7 +113,7 @@ int ParqueaderoRepository::guardarParqueadero(const Parqueadero& p, int usuarioI
     int registroId = p.id;
 
     if (p.id == 0) {
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO parqueaderos (
                 numero, nivel_sotano, tipo_tenencia, matricula_inmobiliaria,
                 coeficiente, unidad_asignada_id, canon_mensual, estado
@@ -130,7 +130,7 @@ int ParqueaderoRepository::guardarParqueadero(const Parqueadero& p, int usuarioI
         ins.exec();
         registroId = static_cast<int>(db.getLastInsertRowid());
     } else {
-        SQLite::Statement upd(db, R"(
+        Db::Statement upd(db, R"(
             UPDATE parqueaderos SET
                 numero = ?, nivel_sotano = ?, tipo_tenencia = ?, matricula_inmobiliaria = ?,
                 coeficiente = ?, unidad_asignada_id = ?, canon_mensual = ?, estado = ?
@@ -148,7 +148,7 @@ int ParqueaderoRepository::guardarParqueadero(const Parqueadero& p, int usuarioI
         upd.exec();
     }
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'PARQUEADEROS', ?, 'parqueaderos', ?, ?)
     )");
@@ -164,19 +164,19 @@ int ParqueaderoRepository::guardarParqueadero(const Parqueadero& p, int usuarioI
 
 void ParqueaderoRepository::eliminarParqueadero(int id, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement checkVeh(db, "SELECT COUNT(*) FROM vehiculos WHERE parqueadero_id = ?");
+    Db::Statement checkVeh(db, "SELECT COUNT(*) FROM vehiculos WHERE parqueadero_id = ?");
     checkVeh.bind(1, id);
     checkVeh.executeStep();
     if (checkVeh.getColumn(0).getInt() > 0) {
         throw std::runtime_error("No se puede eliminar el parqueadero porque tiene vehículos asociados.");
     }
 
-    SQLite::Transaction transaction(db);
-    SQLite::Statement del(db, "DELETE FROM parqueaderos WHERE id = ?");
+    Db::Transaction transaction(db);
+    Db::Statement del(db, "DELETE FROM parqueaderos WHERE id = ?");
     del.bind(1, id);
     del.exec();
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'PARQUEADEROS', 'ELIMINAR', 'parqueaderos', ?, 'Eliminación de parqueadero')
     )");
@@ -210,7 +210,7 @@ std::vector<Bodega> ParqueaderoRepository::listarBodegas(const std::string& filt
     }
     sql += " ORDER BY b.numero ASC;";
 
-    SQLite::Statement query(db, sql);
+    Db::Statement query(db, sql);
     if (!filtro.empty()) {
         std::string pattern = "%" + filtro + "%";
         query.bind(1, pattern);
@@ -242,7 +242,7 @@ int ParqueaderoRepository::guardarBodega(const Bodega& b, int usuarioId) {
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
     int64_t canonEfectivo = (b.tipoTenencia == "COMUN_ALQUILER") ? b.canonMensual : 0;
     double coefEfectivo = (b.tipoTenencia == "PRIVADA") ? b.coeficiente : 0.0;
@@ -250,7 +250,7 @@ int ParqueaderoRepository::guardarBodega(const Bodega& b, int usuarioId) {
     int registroId = b.id;
 
     if (b.id == 0) {
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO bodegas (
                 numero, ubicacion, tipo_tenencia, matricula_inmobiliaria,
                 coeficiente, unidad_asignada_id, canon_mensual
@@ -266,7 +266,7 @@ int ParqueaderoRepository::guardarBodega(const Bodega& b, int usuarioId) {
         ins.exec();
         registroId = static_cast<int>(db.getLastInsertRowid());
     } else {
-        SQLite::Statement upd(db, R"(
+        Db::Statement upd(db, R"(
             UPDATE bodegas SET
                 numero = ?, ubicacion = ?, tipo_tenencia = ?, matricula_inmobiliaria = ?,
                 coeficiente = ?, unidad_asignada_id = ?, canon_mensual = ?
@@ -285,7 +285,7 @@ int ParqueaderoRepository::guardarBodega(const Bodega& b, int usuarioId) {
         upd.exec();
     }
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'BODEGAS', ?, 'bodegas', ?, ?)
     )");
@@ -302,11 +302,11 @@ int ParqueaderoRepository::guardarBodega(const Bodega& b, int usuarioId) {
 
 void ParqueaderoRepository::eliminarBodega(int id, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
-    SQLite::Statement del(db, "DELETE FROM bodegas WHERE id = ?");
+    Db::Transaction transaction(db);
+    Db::Statement del(db, "DELETE FROM bodegas WHERE id = ?");
     del.bind(1, id);
     del.exec();
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'BODEGAS', 'ELIMINAR', 'bodegas', ?, 'Eliminación de bodega')
     )");
@@ -337,7 +337,7 @@ std::vector<Vehiculo> ParqueaderoRepository::listarVehiculos(const std::string& 
     }
 
     sql += " ORDER BY v.placa ASC;";
-    SQLite::Statement query(db, sql);
+    Db::Statement query(db, sql);
     if (!filtro.empty()) {
         std::string pattern = "%" + filtro + "%";
         query.bind(1, pattern);
@@ -376,10 +376,10 @@ int ParqueaderoRepository::guardarVehiculo(const Vehiculo& v, int usuarioId) {
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
     int registroId = v.id;
     if (v.id == 0) {
-        SQLite::Statement ins(db, R"(
+        Db::Statement ins(db, R"(
             INSERT INTO vehiculos (unidad_id, parqueadero_id, placa, tipo, marca_modelo, color)
             VALUES (?, ?, ?, ?, ?, ?)
         )");
@@ -393,7 +393,7 @@ int ParqueaderoRepository::guardarVehiculo(const Vehiculo& v, int usuarioId) {
         ins.exec();
         registroId = static_cast<int64_t>(db.getLastInsertRowid());
     } else {
-        SQLite::Statement upd(db, R"(
+        Db::Statement upd(db, R"(
             UPDATE vehiculos SET
             unidad_id = ?, parqueadero_id = ?, placa = ?, tipo = ?, marca_modelo = ?, color = ?
             WHERE id = ?
@@ -411,7 +411,7 @@ int ParqueaderoRepository::guardarVehiculo(const Vehiculo& v, int usuarioId) {
         upd.exec();
     }
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'VEHICULOS', ?, 'vehiculos', ?, ?)
     )");
@@ -428,11 +428,11 @@ int ParqueaderoRepository::guardarVehiculo(const Vehiculo& v, int usuarioId) {
 
 void ParqueaderoRepository::eliminarVehiculo(int id, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
-    SQLite::Statement del(db, "DELETE FROM vehiculos WHERE id = ?");
+    Db::Transaction transaction(db);
+    Db::Statement del(db, "DELETE FROM vehiculos WHERE id = ?");
     del.bind(1, id);
     del.exec();
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'VEHICULOS', 'ELIMINAR', 'vehiculos', ?, 'Eliminación de vehículo')
     )");

@@ -181,7 +181,7 @@ void EgresosWidget::cargarCombos() {
 
     m_cmbCuentaGasto->clear();
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement q(db, R"(
+    Db::Statement q(db, R"(
         SELECT codigo, nombre FROM puc_cuentas
         WHERE clase = 'GASTOS' AND permite_movimiento = 1
         ORDER BY codigo ASC

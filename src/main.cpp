@@ -26,8 +26,7 @@
 
 
 #include <QApplication>
-#include <QStandardPaths>
-#include <QDir>
+#include <QCoreApplication>
 #include <QMessageBox>
 #include <QStyleFactory>
 #include "core/DbManager.hpp"
@@ -38,24 +37,19 @@
 
 int main(int argc, char* argv[]) {
     // hace refencia al archivo PropiedadHorizontalPH.desktop
-    QGuiApplication::setDesktopFileName("PropiedadHorizontalPH");
+    QApplication::setDesktopFileName("PropiedadHorizontalPH");
 
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create("Fusion"));  // ← agrega esta línea
     app.setApplicationName("PropiedadHorizontalPH");
     app.setOrganizationName("GestionPHColombia");
 
-    // Guardar la base de datos en la carpeta de datos locales del usuario
-    QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dataDir);
-    std::string dbPath = (dataDir + "/copropiedad.db").toStdString();
-    qDebug() << "dataDir:" << dataDir;
-
-    if (!DatabaseManager::instance().initialize(dbPath)) {
+    if (!DatabaseManager::instance().initialize(QCoreApplication::applicationDirPath())) {
         QMessageBox::critical(
             nullptr,
             "Error Crítico",
-            "No se pudo inicializar la base de datos SQLite en [" + dataDir + "]."
+            "No se pudo inicializar o conectar con PostgreSQL:\n"
+                + DatabaseManager::instance().lastError()
         );
         return 1;
     }
@@ -68,7 +62,7 @@ int main(int argc, char* argv[]) {
         return 0; // El usuario cerró el login sin autenticarse
     }
 
-    MainWindow window(login.getSesionAutenticada(), dbPath);
+    MainWindow window(login.getSesionAutenticada());
     window.show();
 
     return app.exec();

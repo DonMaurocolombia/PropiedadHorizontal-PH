@@ -4,7 +4,7 @@
 #include "ConceptosCobroRepository.hpp"
 
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <algorithm>
 #include <cctype>
 #include <stdexcept>
@@ -23,7 +23,7 @@ void validarCuenta(const std::string& codigo,
                    const std::string& claseEsperada,
                    const std::string& naturalezaEsperada) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT clase, naturaleza, permite_movimiento
         FROM puc_cuentas
         WHERE codigo = ?
@@ -39,7 +39,7 @@ void validarCuenta(const std::string& codigo,
 
 int cantidadAsociaciones(int conceptoId) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT
             (SELECT COUNT(*) FROM cuentas_cobro_detalle WHERE concepto_id = ?)
             + (SELECT COUNT(*) FROM facturas_servicio_cobro WHERE concepto_id = ?)
@@ -55,7 +55,7 @@ void registrarAuditoria(int usuarioId,
                         int conceptoId,
                         const std::string& detalle) {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (
             usuario_id, modulo, accion, tabla_afectada, registro_id, detalle
         ) VALUES (?, 'CONCEPTOS_COBRO', ?, 'conceptos_cobro', ?, ?)
@@ -70,7 +70,7 @@ void registrarAuditoria(int usuarioId,
 
 std::vector<ConceptoCobroServicio> ConceptosCobroRepository::listarServicios() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT c.id, c.codigo, c.nombre,
                c.cuenta_ingreso_codigo, i.nombre,
                c.cuenta_cartera_codigo, a.nombre
@@ -98,7 +98,7 @@ std::vector<ConceptoCobroServicio> ConceptosCobroRepository::listarServicios() {
 
 std::vector<CuentaPucOpcion> ConceptosCobroRepository::listarCuentasIngreso() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT codigo, nombre
         FROM puc_cuentas
         WHERE clase = 'INGRESOS' AND naturaleza = 'CREDITO' AND permite_movimiento = 1
@@ -113,7 +113,7 @@ std::vector<CuentaPucOpcion> ConceptosCobroRepository::listarCuentasIngreso() {
 
 std::vector<CuentaPucOpcion> ConceptosCobroRepository::listarCuentasCartera() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT codigo, nombre
         FROM puc_cuentas
         WHERE clase = 'ACTIVO' AND naturaleza = 'DEBITO' AND permite_movimiento = 1
@@ -128,7 +128,7 @@ std::vector<CuentaPucOpcion> ConceptosCobroRepository::listarCuentasCartera() {
 
 std::vector<CuentaPucOpcion> ConceptosCobroRepository::listarCuentasPago() {
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT codigo, nombre
         FROM puc_cuentas
         WHERE clase = 'ACTIVO' AND naturaleza = 'DEBITO'
@@ -155,8 +155,8 @@ int ConceptosCobroRepository::crearServicio(const std::string& codigo,
     validarCuenta(cuentaCarteraCodigo, "ACTIVO", "DEBITO");
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
-    SQLite::Statement insert(db, R"(
+    Db::Transaction transaction(db);
+    Db::Statement insert(db, R"(
         INSERT INTO conceptos_cobro (
             codigo, nombre, cuenta_ingreso_codigo, cuenta_cartera_codigo,
             genera_interes_mora, aplica_iva, porcentaje_iva, tipo_concepto
@@ -188,7 +188,7 @@ void ConceptosCobroRepository::actualizarServicio(int id,
     std::string cuentaIngresoActual;
     std::string cuentaCarteraActual;
     {
-        SQLite::Statement actual(db, R"(
+        Db::Statement actual(db, R"(
             SELECT cuenta_ingreso_codigo, cuenta_cartera_codigo
             FROM conceptos_cobro
             WHERE id = ? AND tipo_concepto = 'SERVICIO'
@@ -206,8 +206,8 @@ void ConceptosCobroRepository::actualizarServicio(int id,
         throw std::runtime_error("No se pueden cambiar las cuentas: el concepto ya tiene facturas o cargos asociados.");
     }
 
-    SQLite::Transaction transaction(db);
-    SQLite::Statement update(db, R"(
+    Db::Transaction transaction(db);
+    Db::Statement update(db, R"(
         UPDATE conceptos_cobro
         SET nombre = ?, cuenta_ingreso_codigo = ?, cuenta_cartera_codigo = ?
         WHERE id = ? AND tipo_concepto = 'SERVICIO'
@@ -230,8 +230,8 @@ void ConceptosCobroRepository::eliminarServicio(int id, int usuarioId) {
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
-    SQLite::Statement remove(db, R"(
+    Db::Transaction transaction(db);
+    Db::Statement remove(db, R"(
         DELETE FROM conceptos_cobro
         WHERE id = ? AND tipo_concepto = 'SERVICIO'
     )");

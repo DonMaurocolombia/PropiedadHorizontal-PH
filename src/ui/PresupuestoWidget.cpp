@@ -206,7 +206,7 @@ void PresupuestoWidget::recargarTodo() {
 void PresupuestoWidget::cargarComboCuentasPUC() {
     m_cmbCuentaPuc->clear();
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement q(db, R"(
+    Db::Statement q(db, R"(
         SELECT codigo, nombre FROM puc_cuentas
         WHERE clase IN ('GASTOS', 'INGRESOS', 'PATRIMONIO') AND permite_movimiento = 1
         ORDER BY codigo ASC

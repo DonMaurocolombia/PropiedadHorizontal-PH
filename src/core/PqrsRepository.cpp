@@ -28,7 +28,7 @@
 #include "PqrsRepository.hpp"
 #include "DbManager.hpp"
 #include "AccountingEngine.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <stdexcept>
 #include <format>
 
@@ -56,7 +56,7 @@ std::vector<PqrsSancion> PqrsRepository::listar(const std::string& filtroEstado,
     }
     sql += " ORDER BY p.id DESC;";
 
-    SQLite::Statement query(db, sql);
+    Db::Statement query(db, sql);
     int idx = 1;
     if (filtroEstado != "TODOS") {
         query.bind(idx++, filtroEstado);
@@ -104,7 +104,7 @@ std::string PqrsRepository::radicar(const PqrsSancion& item, int usuarioId) {
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
     std::string anio = item.fechaRadicacion.substr(0, 4);
     int siguienteCons = db.execAndGet("SELECT COALESCE(MAX(id), 0) + 1 FROM pqrs_sanciones;").getInt();
@@ -114,7 +114,7 @@ std::string PqrsRepository::radicar(const PqrsSancion& item, int usuarioId) {
         ? "EN_DESCARGOS"
         : "ABIERTA";
 
-    SQLite::Statement ins(db, R"(
+    Db::Statement ins(db, R"(
         INSERT INTO pqrs_sanciones (
             radicado, unidad_id, tercero_id, tipo, asunto, descripcion,
             fecha_radicacion, fecha_descargos, valor_multa, estado
@@ -138,7 +138,7 @@ std::string PqrsRepository::radicar(const PqrsSancion& item, int usuarioId) {
 
     int newId = static_cast<int>(db.getLastInsertRowid());
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'PQRS', 'CREAR', 'pqrs_sanciones', ?, ?)
     )");
@@ -161,7 +161,7 @@ void PqrsRepository::actualizarTramite(int id,
 
     auto& db = DatabaseManager::instance().getDb();
 
-    SQLite::Statement getStmt(db, R"(
+    Db::Statement getStmt(db, R"(
         SELECT radicado, unidad_id, tercero_id, tipo, asunto, descripcion, estado, COALESCE(fecha_descargos, '')
         FROM pqrs_sanciones WHERE id = ?
     )");
@@ -207,7 +207,7 @@ void PqrsRepository::actualizarTramite(int id,
         }
     }
 
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
     std::string nuevaDescripcion = descActual;
     if (!notaSeguimiento.empty()) {
@@ -216,7 +216,7 @@ void PqrsRepository::actualizarTramite(int id,
 
     std::string fechaDescFinal = !fechaDescargos.empty() ? fechaDescargos : descFechaExistente;
 
-    SQLite::Statement upd(db, R"(
+    Db::Statement upd(db, R"(
         UPDATE pqrs_sanciones
         SET estado = ?, fecha_descargos = ?, valor_multa = ?, descripcion = ?
         WHERE id = ?
@@ -232,7 +232,7 @@ void PqrsRepository::actualizarTramite(int id,
     if (nuevoEstado == "SANCIONADA" && valorMulta > 0) {
         ComprobanteRequest comp;
         comp.tipoComprobante = "NOTA_CONTABLE";
-        comp.fecha = db.execAndGet("SELECT date('now', 'localtime');").getString();
+        comp.fecha = db.execAndGet("SELECT CURRENT_DATE;").getString();
         comp.descripcion = std::format("Imposición Multa Convivencia {} - {}", radicado, asunto);
         comp.usuarioId = usuarioId;
 
@@ -244,7 +244,7 @@ void PqrsRepository::actualizarTramite(int id,
         AccountingEngine::registrarComprobante(comp);
     }
 
-    SQLite::Statement audit(db, R"(
+    Db::Statement audit(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'PQRS', 'EDITAR', 'pqrs_sanciones', ?, ?)
     )");

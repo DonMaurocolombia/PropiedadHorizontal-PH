@@ -2,276 +2,511 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/*
-   Administrador - PH: Administrador PH busca facilitar y organizar la 
-   administración de copropiedades mediante una plataforma que centralice 
-   la información, los documentos y los procesos administrativos, bajo la 
-   Licencia GPL-3.0-or-later.
-   
-   Copyright (C) 2026 Oscar Mauricio Bonil P.
-
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
-
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
-
-
 #include "DbManager.hpp"
+
+#include "PostgresServer.hpp"
+
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QMap>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QRegularExpression>
+#include <QTemporaryFile>
 #include <QTextStream>
 #include <QDebug>
-#include <stdexcept>
-#include <SQLiteCpp/SQLiteCpp.h>
-#include <sqlite3.h>  // SQLiteCpp ya lo incluye, pero por claridad
-#include <QLoggingCategory>
 
+#include <pqxx/pqxx>
+
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+QMap<QString, QString> readEnvironmentFile(const QString& applicationDirectory) {
+    const QStringList candidates{
+        QDir(applicationDirectory).filePath("datos.env"),
+        QDir::current().filePath("datos.env"),
+        QDir(applicationDirectory).filePath("../datos.env")
+    };
+
+    QString environmentPath;
+    for (const QString& candidate : candidates) {
+        const QString absolute = QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+        if (QFile::exists(absolute)) {
+            environmentPath = absolute;
+            break;
+        }
+    }
+
+    if (environmentPath.isEmpty()) {
+        throw std::runtime_error(
+            "No se encontró datos.env junto a la aplicación ni en el directorio de trabajo."
+        );
+    }
+
+    QFile file(environmentPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        throw std::runtime_error("No se pudo leer datos.env.");
+    }
+
+    QMap<QString, QString> values;
+    QTextStream stream(&file);
+    static const QRegularExpression assignment(
+        R"(^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$)"
+    );
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#')) {
+            continue;
+        }
+
+        const QRegularExpressionMatch match = assignment.match(line);
+        if (!match.hasMatch()) {
+            continue;
+        }
+
+        QString value = match.captured(2).trimmed();
+        if (value.size() >= 2
+            && ((value.startsWith('"') && value.endsWith('"'))
+                || (value.startsWith('\'') && value.endsWith('\'')))) {
+            value = value.mid(1, value.size() - 2);
+        } else {
+            const qsizetype commentPosition = value.indexOf('#');
+            if (commentPosition >= 0) {
+                value = value.left(commentPosition).trimmed();
+            }
+        }
+        values.insert(match.captured(1), value);
+    }
+
+    return values;
+}
+
+QString connectionOption(const QString& key, const QString& value) {
+    QString escaped = value;
+    escaped.replace('\\', "\\\\");
+    escaped.replace('\'', "\\'");
+    return key + "='" + escaped + "'";
+}
+
+QString connectionString(const QString& host,
+                         const QString& port,
+                         const QString& databaseName,
+                         const QString& username,
+                         const QString& password,
+                         const QString& sslMode) {
+    return QString("%1 %2 %3 %4 %5 %6")
+        .arg(connectionOption("host", host),
+             connectionOption("port", port),
+             connectionOption("dbname", databaseName),
+             connectionOption("user", username),
+             connectionOption("password", password),
+             connectionOption("sslmode", sslMode));
+}
+
+std::string quoteIdentifier(const std::string& identifier) {
+    std::string quoted = "\"";
+    for (const char character : identifier) {
+        if (character == '"') {
+            quoted += "\"\"";
+        } else {
+            quoted += character;
+        }
+    }
+    quoted += '"';
+    return quoted;
+}
+
+void ensureDatabaseAndApplicationRole(const QString& host,
+                                      const QString& port,
+                                      const QString& databaseName,
+                                      const QString& username,
+                                      const QString& password,
+                                      const QString& bootstrapPassword,
+                                      const QString& sslMode) {
+    pqxx::connection connection(
+        connectionString(
+            host, port, "postgres", "ph_bootstrap", bootstrapPassword, sslMode
+        ).toStdString()
+    );
+    pqxx::nontransaction transaction(connection);
+    const std::string name = databaseName.toStdString();
+    const std::string user = username.toStdString();
+
+    const pqxx::result existingRole = transaction.exec(
+        "SELECT 1 FROM pg_roles WHERE rolname = " + connection.quote(user)
+    );
+    if (existingRole.empty()) {
+        transaction.exec(
+            "CREATE ROLE " + quoteIdentifier(user)
+            + " WITH LOGIN PASSWORD " + connection.quote(password.toStdString())
+            + " NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        );
+    } else {
+        transaction.exec(
+            "ALTER ROLE " + quoteIdentifier(user)
+            + " WITH LOGIN PASSWORD " + connection.quote(password.toStdString())
+            + " NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        );
+    }
+
+    const pqxx::result result = transaction.exec(
+        "SELECT 1 FROM pg_database WHERE datname = " + connection.quote(name)
+    );
+    if (result.empty()) {
+        transaction.exec(
+            "CREATE DATABASE " + quoteIdentifier(name)
+            + " OWNER " + quoteIdentifier(user)
+        );
+    } else {
+        transaction.exec(
+            "ALTER DATABASE " + quoteIdentifier(name)
+            + " OWNER TO " + quoteIdentifier(user)
+        );
+    }
+}
+
+std::vector<std::string> splitSqlStatements(const std::string& script) {
+    std::vector<std::string> statements;
+    std::string statement;
+    bool inSingleQuote = false;
+    bool inDoubleQuote = false;
+    bool inLineComment = false;
+    int blockCommentDepth = 0;
+
+    for (std::size_t i = 0; i < script.size(); ++i) {
+        const char current = script[i];
+        const char next = i + 1 < script.size() ? script[i + 1] : '\0';
+
+        if (inLineComment) {
+            statement += current;
+            if (current == '\n') {
+                inLineComment = false;
+            }
+            continue;
+        }
+        if (blockCommentDepth > 0) {
+            statement += current;
+            if (current == '/' && next == '*') {
+                statement += script[++i];
+                ++blockCommentDepth;
+            } else if (current == '*' && next == '/') {
+                statement += script[++i];
+                --blockCommentDepth;
+            }
+            continue;
+        }
+        if (!inSingleQuote && !inDoubleQuote && current == '-' && next == '-') {
+            statement += current;
+            statement += script[++i];
+            inLineComment = true;
+            continue;
+        }
+        if (!inSingleQuote && !inDoubleQuote && current == '/' && next == '*') {
+            statement += current;
+            statement += script[++i];
+            blockCommentDepth = 1;
+            continue;
+        }
+
+        if (current == '\'' && !inDoubleQuote) {
+            statement += current;
+            if (inSingleQuote && next == '\'') {
+                statement += script[++i];
+            } else {
+                inSingleQuote = !inSingleQuote;
+            }
+            continue;
+        }
+        if (current == '"' && !inSingleQuote) {
+            inDoubleQuote = !inDoubleQuote;
+            statement += current;
+            continue;
+        }
+
+        if (current == ';' && !inSingleQuote && !inDoubleQuote) {
+            if (!QString::fromStdString(statement).trimmed().isEmpty()) {
+                statements.push_back(statement);
+            }
+            statement.clear();
+        } else {
+            statement += current;
+        }
+    }
+
+    if (!QString::fromStdString(statement).trimmed().isEmpty()) {
+        statements.push_back(statement);
+    }
+    return statements;
+}
+
+void executeSqlScript(Db::Database& database, const QString& resourcePath) {
+    QFile file(resourcePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        throw std::runtime_error(
+            QString("No se pudo leer el recurso SQL %1.").arg(resourcePath).toStdString()
+        );
+    }
+
+    const std::string script = QTextStream(&file).readAll().toStdString();
+    for (const std::string& statement : splitSqlStatements(script)) {
+        database.exec(statement);
+    }
+}
+
+}  // namespace
 
 DatabaseManager& DatabaseManager::instance() {
     static DatabaseManager instance;
     return instance;
 }
 
-bool DatabaseManager::initialize(const std::string& dbPath) {
+bool DatabaseManager::initialize(const QString& applicationDirectory) {
+    m_serverMode = false;
     try {
-        // Abre la BD o la crea si no existe
-        m_db = std::make_unique<SQLite::Database>(
-            dbPath,
-            SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
+        const QMap<QString, QString> environment = readEnvironmentFile(applicationDirectory);
+        const QString mode = environment.value("DB_MODE", "server").trimmed().toLower();
+        if (mode != "server" && mode != "client") {
+            throw std::runtime_error("DB_MODE debe ser 'server' o 'client'.");
+        }
+
+        m_applicationDirectory = QDir(applicationDirectory).absolutePath();
+        m_host = environment.value("DB_HOST", "127.0.0.1").trimmed();
+        m_port = environment.value("DB_PORT", mode == "server" ? "5433" : "5432").trimmed();
+        m_databaseName = environment.value("DB_NAME").trimmed();
+        m_username = environment.value("DB_USER").trimmed();
+        m_password = environment.value("DB_PASSWORD");
+        m_sslMode = environment.value("DB_SSLMODE", "prefer").trimmed();
+        m_binaryDirectory = environment.value("DB_BIN_DIR").trimmed();
+
+        bool validPort = false;
+        const int portNumber = m_port.toInt(&validPort);
+        if (!validPort || portNumber < 1 || portNumber > 65535) {
+            throw std::runtime_error("DB_PORT debe ser un puerto válido.");
+        }
+
+        static const QRegularExpression identifier(R"(^[A-Za-z_][A-Za-z0-9_]*$)");
+        if (!identifier.match(m_databaseName).hasMatch()
+            || !identifier.match(m_username).hasMatch()) {
+            throw std::runtime_error(
+                "DB_NAME y DB_USER solo pueden contener letras, números y guion bajo."
+            );
+        }
+        if (m_password.isEmpty()) {
+            throw std::runtime_error("DB_PASSWORD no puede estar vacío.");
+        }
+
+        static const QStringList sslModes{
+            "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+        };
+        if (!sslModes.contains(m_sslMode)) {
+            throw std::runtime_error("DB_SSLMODE no contiene un modo SSL válido.");
+        }
+
+        if (mode == "server") {
+            if (m_databaseName == "postgres") {
+                throw std::runtime_error(
+                    "DB_NAME debe ser una base propia de la aplicación, no 'postgres'."
+                );
+            }
+            if (m_username == "ph_bootstrap") {
+                throw std::runtime_error("DB_USER no puede ser el usuario interno PostgreSQL.");
+            }
+            const QString normalizedHost = m_host.toLower();
+            if (normalizedHost != "localhost"
+                && normalizedHost != "127.0.0.1"
+                && normalizedHost != "::1") {
+                throw std::runtime_error(
+                    "En modo server, DB_HOST debe apuntar a la máquina local."
+                );
+            }
+            if (portNumber != 5433) {
+                throw std::runtime_error(
+                    "El servidor PostgreSQL local debe usar DB_PORT=5433."
+                );
+            }
+
+            const QString dataDirectory =
+                QDir(m_applicationDirectory).filePath("postgres-data");
+            const QString bootstrapPassword = PostgresServer::ensureRunning(
+                m_applicationDirectory,
+                dataDirectory,
+                m_binaryDirectory,
+                m_port,
+                environment.value("DB_LISTEN_ADDRESSES", "127.0.0.1,::1").trimmed(),
+                environment.value("DB_ALLOWED_CIDRS", "127.0.0.1/32,::1/128").trimmed()
+            );
+
+            ensureDatabaseAndApplicationRole(
+                m_host, m_port, m_databaseName, m_username, m_password,
+                bootstrapPassword, m_sslMode
+            );
+        }
+
+        m_db = std::make_unique<Db::Database>(
+            connectionString(
+                m_host, m_port, m_databaseName, m_username, m_password, m_sslMode
+            ).toStdString()
         );
 
-        // Activar llaves foráneas y modo WAL (mayor velocidad y seguridad ante cortes de luz)
-        m_db->exec("PRAGMA foreign_keys = ON;");
-        m_db->exec("PRAGMA journal_mode = WAL;");
-
-        // Verificar si la base de datos está vacía (sin tablas)
-        int tableCount = m_db->execAndGet(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='copropiedad_config';"
-        ).getInt();
-
-        bool resp = true;
-        if (tableCount == 0) {
-            qInfo() << "Base de datos nueva detectada. Ejecutando schema.sql...";
-            if ( runSchemaFromResources(":/db/schema.sql") ) {
-                qInfo() << "Cargando registros puc_colombia.sql...";
-                resp = runSchemaFromResources(":/db/puc_colombia.sql") ? true: false;
-            } else {
-                resp = false;
-            }
-        }
-/*
-        if (resp) {
-            for (const char* nombreColumna : {"es_visitante", "es_residente"}) {
-                bool existeColumna = false;
-                SQLite::Statement columnas(*m_db, "PRAGMA table_info(terceros)");
-                while (columnas.executeStep()) {
-                    if (columnas.getColumn(1).getString() == nombreColumna) {
-                        existeColumna = true;
-                        break;
-                    }
-                }
-                if (!existeColumna) {
-                    m_db->exec(
-                        "ALTER TABLE terceros ADD COLUMN " + std::string(nombreColumna)
-                        + " INTEGER NOT NULL DEFAULT 0 CHECK (" + std::string(nombreColumna)
-                        + " IN (0, 1))"
-                    );
-                }
-            }
-            resp = runSchemaFromResources(":/db/migrations/002_facturas_servicio_contexto.sql");
-        }
-
-        if (resp) {
-            bool tieneTipoConcepto = false;
-            SQLite::Statement columnas(*m_db, "PRAGMA table_info(conceptos_cobro)");
-            while (columnas.executeStep()) {
-                if (columnas.getColumn(1).getString() == "tipo_concepto") {
-                    tieneTipoConcepto = true;
-                    break;
-                }
-            }
-            if (!tieneTipoConcepto) {
-                m_db->exec(
-                    "ALTER TABLE conceptos_cobro ADD COLUMN tipo_concepto "
-                    "TEXT NOT NULL DEFAULT 'CUENTA_MENSUAL' "
-                    "CHECK (tipo_concepto IN ('CUENTA_MENSUAL', 'SERVICIO'))"
+        const bool schemaExists =
+            m_db->execAndGet("SELECT to_regclass('public.copropiedad_config') IS NOT NULL")
+                .getString() == "t";
+        if (!schemaExists) {
+            if (mode == "client") {
+                throw std::runtime_error(
+                    "La base de datos no tiene el esquema de la aplicación; inicialícelo en el servidor."
                 );
             }
-            resp = runSchemaFromResources(":/db/migrations/003_cobros_servicios.sql");
+            qInfo() << "Base PostgreSQL nueva detectada. Cargando esquema y datos iniciales.";
+            runSchemaFromResources();
         }
 
-        if (resp) {
-            SQLite::Statement migration(*m_db, R"(
-                SELECT COUNT(*) FROM facturas_servicio_migraciones WHERE version = 3
-            )");
-            migration.executeStep();
-            if (migration.getColumn(0).getInt() == 0) {
-                SQLite::Transaction transaction(*m_db);
-                m_db->exec(R"(
-                    UPDATE conceptos_cobro
-                    SET tipo_concepto = 'SERVICIO',
-                        genera_interes_mora = 0,
-                        aplica_iva = 0,
-                        porcentaje_iva = 0.0
-                    WHERE codigo IN ('SALON_SOC', 'PARQ_VISI', 'BODE_DEPO', 'PARQ_COMU')
-                )");
-                m_db->exec(R"(
-                    INSERT OR IGNORE INTO facturas_servicio_cobro (
-                        factura_id, concepto_id, estado
-                    )
-                    SELECT f.id,
-                           cc.id,
-                           'BORRADOR'
-                    FROM facturas_servicio f
-                    LEFT JOIN facturas_servicio_contexto ctx
-                        ON ctx.factura_id = f.id
-                    LEFT JOIN conceptos_cobro cc
-                        ON cc.codigo = CASE ctx.tipo_servicio
-                            WHEN 'PARQUEADERO_VEHICULO' THEN 'PARQ_VISI'
-                            WHEN 'ALQUILER_SALON_COMUNAL' THEN 'SALON_SOC'
-                            ELSE NULL
-                        END
-                )");
-                m_db->exec("INSERT INTO facturas_servicio_migraciones (version) VALUES (3)");
-                transaction.commit();
-            }
+        {
+            Db::Transaction transaction(*m_db);
+            m_db->exec("SELECT pg_advisory_xact_lock(735842195117331)");
+            executeSqlScript(*m_db, ":/db/migrations/003_permisos_paginas.sql");
+            transaction.commit();
         }
 
-        if (resp) {
-            SQLite::Statement migration(*m_db, R"(
-                SELECT COUNT(*) FROM facturas_servicio_migraciones WHERE version = 2
-            )");
-            migration.executeStep();
-            if (migration.getColumn(0).getInt() == 0) {
-                SQLite::Transaction transaction(*m_db);
-                m_db->exec(R"(
-                    UPDATE facturas_servicio_detalle
-                    SET iva_tasa_puntos_base = 0, iva_cop = 0
-                )");
-
-                m_db->exec(R"(
-                    UPDATE facturas_servicio
-                    SET iva_total_cop = 0, total_cop = subtotal_cop
-                )");
-
-                m_db->exec(
-                    "INSERT INTO facturas_servicio_migraciones (version) VALUES (2)"
-                );
-                transaction.commit();
-            }
-        }
- */
-
-        return resp;
-    } catch (const std::exception& e) {
-        qCritical() << "Error inicializando SQLite:" << e.what();
+        m_lastError.clear();
+        m_serverMode = mode == "server";
+        return true;
+    } catch (const std::exception& error) {
+        m_db.reset();
+        m_lastError = QString::fromUtf8(error.what());
+        qCritical() << "Error inicializando PostgreSQL:" << m_lastError;
         return false;
     }
 }
 
-SQLite::Database& DatabaseManager::getDb() {
+Db::Database& DatabaseManager::getDb() {
     if (!m_db) {
-        throw std::runtime_error("La base de datos no ha sido inicializada.");
+        throw std::runtime_error("La conexión PostgreSQL no ha sido inicializada.");
     }
-    
     return *m_db;
 }
 
-bool DatabaseManager::runSchemaFromResources(const std::string& dbName) {
-    QFile schemaFile(QString::fromStdString(dbName));
-    if (!schemaFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        throw std::runtime_error("No se pudo abrir " + dbName + " desde los recursos.");
+QString DatabaseManager::lastError() const {
+    return m_lastError;
+}
+
+bool DatabaseManager::isServerMode() const {
+    return m_serverMode;
+}
+
+bool DatabaseManager::stopLocalServer(QString* errorMessage) const {
+    if (!m_serverMode) {
+        if (errorMessage) {
+            *errorMessage = "No se puede apagar PostgreSQL desde el modo cliente.";
+        }
+        return false;
     }
 
-    QTextStream in(&schemaFile);
-    std::string sqlScript = in.readAll().toStdString();
+    const QString dataDirectory =
+        QDir(m_applicationDirectory).filePath("postgres-data");
+    return PostgresServer::stop(
+        m_applicationDirectory, dataDirectory, m_binaryDirectory, errorMessage
+    );
+}
 
-    try {
-        SQLite::Transaction transaction(*m_db);
-        if (!ejecutarSchema(sqlScript, dbName)) {
-            return false;  // rollback automático al salir del scope
+bool DatabaseManager::createBackup(const QString& destination, QString* errorMessage) const {
+    const QString pgDump =
+        PostgresServer::findProgram("pg_dump", m_applicationDirectory, m_binaryDirectory);
+    if (pgDump.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = "No se encontró pg_dump. Instale las herramientas cliente de PostgreSQL.";
         }
-        transaction.commit();
-    } catch (const std::exception& e) {
-        qCritical() << "Error ejecutando " << dbName << ": " << e.what();
         return false;
-    }   
+    }
 
-    qInfo() << "Esquema de base de datos [" + dbName + "] creado exitosamente.";
+    QTemporaryFile temporaryFile(
+        QFileInfo(destination).dir().filePath(".ph-backup-XXXXXX")
+    );
+    if (!temporaryFile.open()) {
+        if (errorMessage) {
+            *errorMessage = "No se pudo preparar un archivo temporal para el respaldo.";
+        }
+        return false;
+    }
+    const QString temporaryPath = temporaryFile.fileName();
+    temporaryFile.close();
+    temporaryFile.setAutoRemove(false);
+    QFile::remove(temporaryPath);
+
+    QProcess process;
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("PGPASSWORD", m_password);
+    process.setProcessEnvironment(environment);
+    process.start(pgDump, {
+        "--host", m_host,
+        "--port", m_port,
+        "--username", m_username,
+        "--format=custom",
+        "--file", temporaryPath,
+        m_databaseName
+    });
+
+    if (!process.waitForStarted(10000)) {
+        QFile::remove(temporaryPath);
+        if (errorMessage) {
+            *errorMessage = process.errorString();
+        }
+        return false;
+    }
+    if (!process.waitForFinished(180000)) {
+        process.kill();
+        process.waitForFinished();
+        QFile::remove(temporaryPath);
+        if (errorMessage) {
+            *errorMessage = "pg_dump excedió el tiempo de espera.";
+        }
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0) {
+        QFile::remove(temporaryPath);
+        if (errorMessage) {
+            *errorMessage = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+        }
+        return false;
+    }
+
+    const QString previousPath = destination + ".previous";
+    const bool hadPreviousFile = QFile::exists(destination);
+    if (hadPreviousFile) {
+        QFile::remove(previousPath);
+        if (!QFile::rename(destination, previousPath)) {
+            QFile::remove(temporaryPath);
+            if (errorMessage) {
+                *errorMessage = "No se pudo reemplazar el archivo de respaldo existente.";
+            }
+            return false;
+        }
+    }
+    if (!QFile::rename(temporaryPath, destination)) {
+        if (hadPreviousFile) {
+            QFile::rename(previousPath, destination);
+        }
+        QFile::remove(temporaryPath);
+        if (errorMessage) {
+            *errorMessage = "No se pudo guardar el respaldo PostgreSQL.";
+        }
+        return false;
+    }
+    if (hadPreviousFile) {
+        QFile::remove(previousPath);
+    }
+
     return true;
 }
 
-bool DatabaseManager::ejecutarSchema(const std::string& sqlScript, const std::string& dbName) {
-    sqlite3* rawDb = m_db->getHandle();  // SQLiteCpp expone el handle crudo
-    const char* remaining = sqlScript.c_str();
-    int stmtIndex = 0;
-
-    while (true) {
-        // Saltar whitespace / comentarios al inicio
-        while (*remaining && (isspace(static_cast<unsigned char>(*remaining))
-                          || *remaining == '-' || *remaining == '/')) {
-            // Si es comentario de línea (--), saltar hasta \n
-            if (remaining[0] == '-' && remaining[1] == '-') {
-                while (*remaining && *remaining != '\n') remaining++;
-            }
-            else if (remaining[0] == '/' && remaining[1] == '*') { // Si es comentario bloque (/* ... */), saltar hasta */
-                remaining += 2;
-                while (*remaining && !(remaining[0] == '*' && remaining[1] == '/')) remaining++;
-                remaining += 2;
-            }
-            else remaining++;
-        }
-
-        if (!*remaining) break;  // fin del script
-
-        // Preparar la siguiente sentencia
-        sqlite3_stmt* stmt = nullptr;
-        const char* tail = nullptr;
-        int rc = sqlite3_prepare_v2(rawDb, remaining, -1, &stmt, &tail);
-
-        // Extraer el texto de la sentencia que acabamos de preparar
-        std::string stmtText(remaining, tail ? tail - remaining : strlen(remaining));
-
-        if (rc != SQLITE_OK) {
-            // Error de sintaxis: tail apunta a donde el parser se detuvo
-            std::string errorFragment(remaining, tail ? tail - remaining : strlen(remaining));
-            qCritical() << "Error sintáctico en sentencia #" << (stmtIndex + 1)
-                        << " de" << dbName << ":\n"
-                        << "  SQL: " << errorFragment << "\n"
-                        << "  Error: " << sqlite3_errmsg(rawDb);
-            return false;
-        }
-
-        if (!stmt) {
-            // Solo whitespace/comentarios — avanzar a tail
-            if (!tail || tail == remaining) break;  // evitar loop infinito
-            remaining = tail;
-            continue;
-        }
-
-        // Ejecutar
-        rc = sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-
-        if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-            qCritical() << "Error ejecutando sentencia #" << (stmtIndex + 1)
-                        << " de" << dbName << ":\n"
-                        << "  SQL: " << stmtText << "\n"
-                        << "  Error: " << sqlite3_errmsg(rawDb);
-            return false;
-        }
-
-        stmtIndex++;
-        remaining = tail;
-    }
-
-    return true;
+void DatabaseManager::runSchemaFromResources() {
+    Db::Transaction transaction(*m_db);
+    executeSqlScript(*m_db, ":/db/schema.sql");
+    executeSqlScript(*m_db, ":/db/puc_colombia.sql");
+    transaction.commit();
 }

@@ -28,7 +28,7 @@
 #include "BillingEngine.hpp"
 #include "DbManager.hpp"
 #include "AccountingEngine.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QDebug>
 #include <stdexcept>
 #include <cmath>
@@ -53,7 +53,7 @@ int BillingEngine::generarFacturacionMensual(
         auto& db = DatabaseManager::instance().getDb();
 
         // 1. Verificar que no exista ya facturación generada para este periodo
-        SQLite::Statement checkPeriodo(db, "SELECT COUNT(*) FROM cuentas_cobro WHERE periodo = ? AND estado != 'ANULADA'");
+        Db::Statement checkPeriodo(db, "SELECT COUNT(*) FROM cuentas_cobro WHERE periodo = ? AND estado != 'ANULADA'");
         checkPeriodo.bind(1, periodo);
         checkPeriodo.executeStep();
         if (checkPeriodo.getColumn(0).getInt() > 0) {
@@ -65,7 +65,7 @@ int BillingEngine::generarFacturacionMensual(
         int diaDescuento = 10;
         double pctDescuento = 0.0;
 
-        SQLite::Statement cfgStmt(db, R"(
+        Db::Statement cfgStmt(db, R"(
             SELECT tasa_mora_mensual, dia_limite_pronto_pago, porcentaje_descuento_pronto_pago
             FROM copropiedad_config WHERE id = 1
         )");
@@ -96,7 +96,7 @@ int BillingEngine::generarFacturacionMensual(
         };
 
         auto cargarConcepto = [&](const std::string& codigo) -> ConceptoInfo {
-            SQLite::Statement q(db, R"(
+            Db::Statement q(db, R"(
                 SELECT id, nombre, cuenta_ingreso_codigo, cuenta_cartera_codigo, aplica_iva, porcentaje_iva
                 FROM conceptos_cobro WHERE codigo = ?
             )");
@@ -119,7 +119,7 @@ int BillingEngine::generarFacturacionMensual(
         ConceptoInfo cParqAlq  = cargarConcepto("PARQ_ALQ");
 
         // 4. Obtener todas las unidades ACTIVAS
-        SQLite::Statement unidadesStmt(db, R"(
+        Db::Statement unidadesStmt(db, R"(
             SELECT id, nomenclatura, coeficiente, propietario_principal_id, inquilino_actual_id, enviar_cobro_a
             FROM unidades_privadas
             WHERE estado = 'ACTIVA'
@@ -130,7 +130,7 @@ int BillingEngine::generarFacturacionMensual(
         std::string fechaLimiteDesc = std::format("{}-{:02d}", periodo, diaDescuento);
 
         // Transacción global para todo el lote de facturación
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
         while (unidadesStmt.executeStep()) {
             int unidadId = unidadesStmt.getColumn(0).getInt();
@@ -145,7 +145,7 @@ int BillingEngine::generarFacturacionMensual(
             }
 
             // A. Consultar saldo anterior pendiente de la unidad
-            SQLite::Statement saldoStmt(db, R"(
+            Db::Statement saldoStmt(db, R"(
                 SELECT COALESCE(SUM(saldo_pendiente), 0)
                 FROM cuentas_cobro
                 WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
@@ -155,7 +155,7 @@ int BillingEngine::generarFacturacionMensual(
             int64_t saldoAnterior = saldoStmt.getColumn(0).getInt64();
 
             // B. Consultar capital vencido que genera interés de mora
-            SQLite::Statement baseMoraStmt(db, R"(
+            Db::Statement baseMoraStmt(db, R"(
                 SELECT COALESCE(SUM(d.saldo_concepto), 0)
                 FROM cuentas_cobro_detalle d
                 INNER JOIN cuentas_cobro c ON d.cuenta_cobro_id = c.id
@@ -173,7 +173,7 @@ int BillingEngine::generarFacturacionMensual(
             int64_t valorMora = (capitalVencido > 0) ? std::llround(capitalVencido * tasaMoraMensual) : 0;
 
             // D. Verificar parqueaderos o bodegas comunes en alquiler asignados a esta unidad
-            SQLite::Statement alqStmt(db, R"(
+            Db::Statement alqStmt(db, R"(
                 SELECT COALESCE(SUM(canon_mensual), 0)
                 FROM parqueaderos
                 WHERE unidad_asignada_id = ? AND tipo_tenencia = 'COMUN_ALQUILER'
@@ -187,7 +187,7 @@ int BillingEngine::generarFacturacionMensual(
 
             std::vector<CargoServicioPendiente> cargosServicio;
             int64_t valorCargosServicio = 0;
-            SQLite::Statement cargosStmt(db, R"(
+            Db::Statement cargosStmt(db, R"(
                 SELECT f.id, con.id, con.nombre,
                        con.cuenta_ingreso_codigo, con.cuenta_cartera_codigo,
                        d.descripcion, d.valor_base_cop
@@ -270,7 +270,7 @@ int BillingEngine::generarFacturacionMensual(
             int comprobanteId = AccountingEngine::registrarComprobanteEnTransaccion(compReq);
 
             // F. Marcar cuentas anteriores como VENCIDAS si tenían saldo pendiente
-            SQLite::Statement vencStmt(db, R"(
+            Db::Statement vencStmt(db, R"(
                 UPDATE cuentas_cobro
                 SET estado = 'VENCIDA'
                 WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL')
@@ -279,7 +279,7 @@ int BillingEngine::generarFacturacionMensual(
             vencStmt.exec();
 
             // G. Insertar encabezado de Cuenta de Cobro
-            SQLite::Statement insertCC(db, R"(
+            Db::Statement insertCC(db, R"(
                 INSERT INTO cuentas_cobro (
                     numero_documento, unidad_id, tercero_id, periodo,
                     fecha_emision, fecha_vencimiento, fecha_limite_descuento,
@@ -306,7 +306,7 @@ int BillingEngine::generarFacturacionMensual(
             int cuentaCobroId = static_cast<int>(db.getLastInsertRowid());
 
             // H. Insertar líneas de detalle
-            SQLite::Statement insertDet(db, R"(
+            Db::Statement insertDet(db, R"(
                 INSERT INTO cuentas_cobro_detalle (
                 cuenta_cobro_id, concepto_id, descripcion, valor, iva, saldo_concepto
                 ) VALUES (?, ?, ?, ?, ?, ?)
@@ -333,7 +333,7 @@ int BillingEngine::generarFacturacionMensual(
                 const std::string descripcion = cargo.conceptoNombre + " - " + cargo.descripcion;
                 agregarDetalle(cargo.conceptoId, descripcion, cargo.valor, 0);
                 if (facturasServicioIncluidas.insert(cargo.facturaId).second) {
-                    SQLite::Statement marcarIncluida(db, R"(
+                    Db::Statement marcarIncluida(db, R"(
                         UPDATE facturas_servicio_cobro
                         SET estado = 'INCLUIDA_EN_CUENTA',
                             cuenta_cobro_id = ?,
@@ -352,7 +352,7 @@ int BillingEngine::generarFacturacionMensual(
         }
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al generar facturacion mensual: " << e.what();
        throw std::runtime_error(std::string("No se pudo completar la facturación mensual: ") + e.what());
     }
@@ -380,7 +380,7 @@ std::vector<CuentaCobroResumen> BillingEngine::listarCuentasCobro(const std::str
         }
 
         sql += " ORDER BY c.id DESC;";
-        SQLite::Statement query(db, sql);
+        Db::Statement query(db, sql);
         if (!periodo.empty()) {
             query.bind(1, periodo);
         }
@@ -402,7 +402,7 @@ std::vector<CuentaCobroResumen> BillingEngine::listarCuentasCobro(const std::str
             r.estado = query.getColumn(12).getString();
             lista.push_back(r);
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar cuentas de cobro: " << e.what();
     }
 
@@ -414,7 +414,7 @@ CuentaCobroCompleta BillingEngine::obtenerCuentaCompleta(int cuentaCobroId) {
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT
             c.id, c.numero_documento, c.unidad_id, u.nomenclatura, u.torre_bloque, u.coeficiente,
             t.nombre_razon_social, t.numero_documento, COALESCE(t.email, ''),
@@ -452,7 +452,7 @@ CuentaCobroCompleta BillingEngine::obtenerCuentaCompleta(int cuentaCobroId) {
         cc.encabezado.totalAPagar = query.getColumn(16).getInt64();
         cc.encabezado.saldoPendiente = query.getColumn(17).getInt64();
         cc.encabezado.estado = query.getColumn(18).getString();
-        SQLite::Statement detStmt(db, R"(
+        Db::Statement detStmt(db, R"(
             SELECT con.codigo, d.descripcion, d.valor, d.iva
             FROM cuentas_cobro_detalle d
             INNER JOIN conceptos_cobro con ON d.concepto_id = con.id
@@ -468,7 +468,7 @@ CuentaCobroCompleta BillingEngine::obtenerCuentaCompleta(int cuentaCobroId) {
                 detStmt.getColumn(3).getInt64()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al obtener la cuenta completa: " << e.what();
     }
 

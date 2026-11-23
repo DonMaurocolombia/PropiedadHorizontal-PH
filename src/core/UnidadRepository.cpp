@@ -27,7 +27,7 @@
 
 #include "UnidadRepository.hpp"
 #include "DbManager.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <stdexcept>
 #include <format>
 
@@ -52,7 +52,7 @@ std::vector<UnidadPrivada> UnidadRepository::listarTodas(const std::string& filt
     }
     sql += " ORDER BY u.torre_bloque ASC, u.nomenclatura ASC;";
 
-    SQLite::Statement query(db, sql);
+    Db::Statement query(db, sql);
     if (!filtro.empty()) {
         std::string likePattern = "%" + filtro + "%";
         query.bind(1, likePattern);
@@ -97,9 +97,9 @@ int UnidadRepository::crear(const UnidadPrivada& u, int usuarioId) {
     }
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
-    SQLite::Statement stmt(db, R"(
+    Db::Statement stmt(db, R"(
         INSERT INTO unidades_privadas (
             torre_bloque, nomenclatura, tipo, matricula_inmobiliaria,
             area_privada_m2, coeficiente, propietario_principal_id,
@@ -130,16 +130,16 @@ int UnidadRepository::crear(const UnidadPrivada& u, int usuarioId) {
     int newId = static_cast<int>(db.getLastInsertRowid());
 
     // Registrar historial inicial de propiedad
-    SQLite::Statement histStmt(db, R"(
+    Db::Statement histStmt(db, R"(
         INSERT INTO unidad_propietarios_historial (unidad_id, tercero_id, porcentaje_propiedad, fecha_inicio)
-        VALUES (?, ?, 100.0, date('now', 'localtime'))
+        VALUES (?, ?, 100.0, CURRENT_DATE::text)
     )");
     histStmt.bind(1, newId);
     histStmt.bind(2, u.propietarioPrincipalId);
     histStmt.exec();
 
     // Auditoría
-    SQLite::Statement auditStmt(db, R"(
+    Db::Statement auditStmt(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'UNIDADES', 'CREAR', 'unidades_privadas', ?, ?)
     )");
@@ -157,17 +157,17 @@ void UnidadRepository::actualizar(const UnidadPrivada& u, int usuarioId) {
     if (u.nomenclatura.empty()) throw std::runtime_error("La nomenclatura es obligatoria.");
 
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
     // Verificar si cambió el propietario para actualizar el historial de tradición
-    SQLite::Statement checkProp(db, "SELECT propietario_principal_id FROM unidades_privadas WHERE id = ?");
+    Db::Statement checkProp(db, "SELECT propietario_principal_id FROM unidades_privadas WHERE id = ?");
     checkProp.bind(1, u.id);
     if (!checkProp.executeStep()) {
         throw std::runtime_error("La unidad no existe.");
     }
     int propietarioAnterior = checkProp.getColumn(0).getInt();
 
-    SQLite::Statement stmt(db, R"(
+    Db::Statement stmt(db, R"(
         UPDATE unidades_privadas SET
             torre_bloque = ?, nomenclatura = ?, tipo = ?, matricula_inmobiliaria = ?,
             area_privada_m2 = ?, coeficiente = ?, propietario_principal_id = ?,
@@ -197,24 +197,24 @@ void UnidadRepository::actualizar(const UnidadPrivada& u, int usuarioId) {
     stmt.exec();
 
     if (propietarioAnterior != u.propietarioPrincipalId) {
-        SQLite::Statement closeHist(db, R"(
+        Db::Statement closeHist(db, R"(
             UPDATE unidad_propietarios_historial
-            SET fecha_fin = date('now', 'localtime')
+            SET fecha_fin = CURRENT_DATE::text
             WHERE unidad_id = ? AND fecha_fin IS NULL
         )");
         closeHist.bind(1, u.id);
         closeHist.exec();
 
-        SQLite::Statement newHist(db, R"(
+        Db::Statement newHist(db, R"(
             INSERT INTO unidad_propietarios_historial (unidad_id, tercero_id, porcentaje_propiedad, fecha_inicio)
-            VALUES (?, ?, 100.0, date('now', 'localtime'))
+            VALUES (?, ?, 100.0, CURRENT_DATE::text)
         )");
         newHist.bind(1, u.id);
         newHist.bind(2, u.propietarioPrincipalId);
         newHist.exec();
     }
 
-    SQLite::Statement auditStmt(db, R"(
+    Db::Statement auditStmt(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'UNIDADES', 'EDITAR', 'unidades_privadas', ?, ?)
     )");
@@ -230,7 +230,7 @@ void UnidadRepository::eliminar(int id, int usuarioId) {
     auto& db = DatabaseManager::instance().getDb();
 
     // Evitar borrar unidades que ya tienen cuentas de cobro o movimientos
-    SQLite::Statement checkMovs(db, "SELECT COUNT(*) FROM cuentas_cobro WHERE unidad_id = ?");
+    Db::Statement checkMovs(db, "SELECT COUNT(*) FROM cuentas_cobro WHERE unidad_id = ?");
     checkMovs.bind(1, id);
     checkMovs.executeStep();
     if (checkMovs.getColumn(0).getInt() > 0) {
@@ -240,17 +240,17 @@ void UnidadRepository::eliminar(int id, int usuarioId) {
         );
     }
 
-    SQLite::Transaction transaction(db);
+    Db::Transaction transaction(db);
 
-    SQLite::Statement delHist(db, "DELETE FROM unidad_propietarios_historial WHERE unidad_id = ?");
+    Db::Statement delHist(db, "DELETE FROM unidad_propietarios_historial WHERE unidad_id = ?");
     delHist.bind(1, id);
     delHist.exec();
 
-    SQLite::Statement delUnit(db, "DELETE FROM unidades_privadas WHERE id = ?");
+    Db::Statement delUnit(db, "DELETE FROM unidades_privadas WHERE id = ?");
     delUnit.bind(1, id);
     delUnit.exec();
 
-    SQLite::Statement auditStmt(db, R"(
+    Db::Statement auditStmt(db, R"(
         INSERT INTO auditoria_logs (usuario_id, modulo, accion, tabla_afectada, registro_id, detalle)
         VALUES (?, 'UNIDADES', 'ELIMINAR', 'unidades_privadas', ?, 'Eliminación de unidad sin movimientos')
     )");
@@ -271,7 +271,7 @@ double UnidadRepository::obtenerSumaCoeficientesActivos() {
 std::vector<TerceroResumen> UnidadRepository::listarPropietarios() {
     auto& db = DatabaseManager::instance().getDb();
     std::vector<TerceroResumen> lista;
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT id, numero_documento, nombre_razon_social
         FROM terceros
         WHERE es_propietario = 1 AND activo = 1
@@ -286,7 +286,7 @@ std::vector<TerceroResumen> UnidadRepository::listarPropietarios() {
 std::vector<TerceroResumen> UnidadRepository::listarInquilinos() {
     auto& db = DatabaseManager::instance().getDb();
     std::vector<TerceroResumen> lista;
-    SQLite::Statement query(db, R"(
+    Db::Statement query(db, R"(
         SELECT id, numero_documento, nombre_razon_social
         FROM terceros
         WHERE es_inquilino = 1 AND activo = 1

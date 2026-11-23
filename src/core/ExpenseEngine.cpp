@@ -28,7 +28,7 @@
 #include "ExpenseEngine.hpp"
 #include "DbManager.hpp"
 #include "AccountingEngine.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QPrinter>
 #include <QTextDocument>
 #include <QPageSize>
@@ -116,19 +116,34 @@ std::vector<EgresoResumen> ExpenseEngine::listarEgresos() {
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT
                 c.id,
                 c.consecutivo,
                 c.fecha,
-                t.nombre_razon_social,
-                t.numero_documento,
+                COALESCE((
+                    SELECT t.nombre_razon_social
+                    FROM movimientos_contables m_ref
+                    INNER JOIN terceros t ON m_ref.tercero_id = t.id
+                    WHERE m_ref.comprobante_id = c.id AND m_ref.debito > 0
+                    ORDER BY m_ref.id ASC
+                    LIMIT 1
+                ), ''),
+                COALESCE((
+                    SELECT t.numero_documento
+                    FROM movimientos_contables m_ref
+                    INNER JOIN terceros t ON m_ref.tercero_id = t.id
+                    WHERE m_ref.comprobante_id = c.id AND m_ref.debito > 0
+                    ORDER BY m_ref.id ASC
+                    LIMIT 1
+                ), ''),
                 c.descripcion,
                 COALESCE((
                     SELECT p.codigo || ' - ' || p.nombre
                     FROM movimientos_contables m
                     INNER JOIN puc_cuentas p ON m.cuenta_codigo = p.codigo
                     WHERE m.comprobante_id = c.id AND m.debito > 0
+                    ORDER BY m.id ASC
                     LIMIT 1
                 ), 'Gasto General') AS cuenta_gasto,
                 COALESCE((
@@ -144,10 +159,12 @@ std::vector<EgresoResumen> ExpenseEngine::listarEgresos() {
                 ), 0) AS valor_neto,
                 c.estado
             FROM comprobantes_contables c
-            INNER JOIN movimientos_contables m_ref ON m_ref.comprobante_id = c.id AND m_ref.debito > 0
-            INNER JOIN terceros t ON m_ref.tercero_id = t.id
             WHERE c.tipo_comprobante = 'EGRESO'
-            GROUP BY c.id
+              AND EXISTS (
+                  SELECT 1
+                  FROM movimientos_contables m_ref
+                  WHERE m_ref.comprobante_id = c.id AND m_ref.debito > 0
+              )
             ORDER BY c.id DESC
         )");
 
@@ -166,7 +183,7 @@ std::vector<EgresoResumen> ExpenseEngine::listarEgresos() {
                 query.getColumn(10).getString()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar egresos: " << e.what();
     }
 
@@ -184,7 +201,7 @@ void ExpenseEngine::exportarComprobanteEgresoPDF(int comprobanteId, const std::s
     try {
         auto& db = DatabaseManager::instance().getDb();
 
-        SQLite::Statement cfg(db, R"(
+        Db::Statement cfg(db, R"(
             SELECT razon_social, nit, representante_legal,
                 COALESCE(contador_nombre, 'Contador(a) Público')
             FROM copropiedad_config WHERE id = 1
@@ -196,7 +213,7 @@ void ExpenseEngine::exportarComprobanteEgresoPDF(int comprobanteId, const std::s
             contador = QString::fromStdString(cfg.getColumn(3).getString());
         }
 
-        SQLite::Statement compStmt(db, R"(
+        Db::Statement compStmt(db, R"(
             SELECT consecutivo, fecha, descripcion, estado
             FROM comprobantes_contables
             WHERE id = ? AND tipo_comprobante = 'EGRESO'
@@ -212,7 +229,7 @@ void ExpenseEngine::exportarComprobanteEgresoPDF(int comprobanteId, const std::s
         estado = QString::fromStdString(compStmt.getColumn(3).getString());
 
         // Obtener líneas contables del egreso y datos del beneficiario
-        SQLite::Statement movStmt(db, R"(
+        Db::Statement movStmt(db, R"(
             SELECT m.cuenta_codigo, p.nombre, t.nombre_razon_social, t.tipo_documento, t.numero_documento,
                 m.debito, m.credito
             FROM movimientos_contables m
@@ -248,7 +265,7 @@ void ExpenseEngine::exportarComprobanteEgresoPDF(int comprobanteId, const std::s
                 </tr>
             )").arg(cta, ctaNombre, fmtPesos(deb), fmtPesos(cred));
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al exportar el comprobante de egreso en PDF: " << e.what();
     }
 

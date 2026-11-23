@@ -108,7 +108,7 @@ Se consideran decisiones tomadas, auque no cerradas por completo.
 - **Sistema Operativo (SO):** El desarrollo y documentación de puesta en producción se realizará para el ***SO Linux***
 - **Lenguaje de programación:** Se desarrollará en lenguaje C++ ya que ofrece manejo seguro de memoria con smart pointers, std::format, fechas con std::chrono, rapidéz y eficienda de la solución.
 - *Interfaz Gráfica (GUI):* Qt 6 (Widgets o QML). Es el estándar de la industria en C++ para aplicaciones empresariales de escritorio; permite crear tablas, formularios complejos y exportar a PDF fácilmente.
-- **Base de Datos (DB):** En la primera etapa será embebida con SQLite 3, usando la librería wrapper SQLiteCpp. Al ser un solo archivo .db, facilita las copias de seguridad y hace que la aplicación sea 100% portable.
+- **Base de Datos (DB):** PostgreSQL con libpqxx, en arquitectura cliente-servidor. El equipo servidor puede inicializar un clúster local para desarrollo y los clientes se conectan al host configurado.
 - **Generación de Reportes y PDF:** QtPdf / QPrinter, para generar cuentas de cobro y estados financieros en PDF directamente desde plantillas HTML/CSS, o PoDoFo.
 - **Cifrado y Seguridad:** OpenSSL o libsodium para hashear contraseñas de los perfiles de usuario (Argon2 o bcrypt).
 - El modelo de permisos detallado.

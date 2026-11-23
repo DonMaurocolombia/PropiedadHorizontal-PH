@@ -1,0 +1,34 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Build and package
+        shell: pwsh
+        run: .\scripts\build-windows.ps1 -QtRoot "$env:QT_ROOT_DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PropiedadHorizontalPH-windows-x64
+          path: build/package/PropiedadHorizontalPH-windows-x64.zip
+          if-no-files-found: error

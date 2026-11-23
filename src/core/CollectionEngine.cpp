@@ -28,7 +28,7 @@
 #include "CollectionEngine.hpp"
 #include "DbManager.hpp"
 #include "AccountingEngine.hpp"
-#include <SQLiteCpp/SQLiteCpp.h>
+#include "core/PostgresDatabase.hpp"
 #include <QDebug>
 #include <stdexcept>
 #include <format>
@@ -42,7 +42,7 @@ std::vector<DetalleDeudaUnidad> CollectionEngine::consultarDeudaPorPrelacion(int
         auto& db = DatabaseManager::instance().getDb();
 
         // Prelación legal: primero conceptos de MORA (prioridad 1), luego capital ordenado por periodo ASC
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT
                 c.id,
                 c.numero_documento,
@@ -76,7 +76,7 @@ std::vector<DetalleDeudaUnidad> CollectionEngine::consultarDeudaPorPrelacion(int
             item.saldoConcepto = query.getColumn(6).getInt64();
             lista.push_back(item);
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al consultar deuda por prelacion: " << e.what();
     }
 
@@ -88,7 +88,7 @@ int64_t CollectionEngine::obtenerSaldoTotalUnidad(int unidadId) {
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT COALESCE(SUM(saldo_pendiente), 0)
             FROM cuentas_cobro
             WHERE unidad_id = ? AND estado IN ('PENDIENTE', 'PAGO_PARCIAL', 'VENCIDA')
@@ -96,7 +96,7 @@ int64_t CollectionEngine::obtenerSaldoTotalUnidad(int unidadId) {
         query.bind(1, unidadId);
         query.executeStep();
         resp = query.getColumn(0).getInt64();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al obtener saldo total por unidad: " << e.what();
     }
 
@@ -121,7 +121,7 @@ std::string CollectionEngine::registrarPago(const ReciboCajaRequest& req) {
         auto& db = DatabaseManager::instance().getDb();
 
         // Obtener propietario/tercero de la unidad
-        SQLite::Statement unitStmt(db, R"(
+        Db::Statement unitStmt(db, R"(
             SELECT nomenclatura, propietario_principal_id, inquilino_actual_id, enviar_cobro_a
             FROM unidades_privadas WHERE id = ?
         )");
@@ -139,7 +139,7 @@ std::string CollectionEngine::registrarPago(const ReciboCajaRequest& req) {
         // Obtener conceptos pendientes ordenados por prelación legal
         auto deudasPendientes = consultarDeudaPorPrelacion(req.unidadId);
 
-        SQLite::Transaction transaction(db);
+        Db::Transaction transaction(db);
 
         // Generar consecutivo de Recibo de Caja
         int siguienteCons = db.execAndGet("SELECT COALESCE(MAX(id), 0) + 1 FROM recibos_caja;").getInt();
@@ -183,7 +183,7 @@ std::string CollectionEngine::registrarPago(const ReciboCajaRequest& req) {
             remanente -= abono;
 
             // Buscar cuenta PUC de cartera asociada al concepto
-            SQLite::Statement ctaStmt(db, "SELECT cuenta_cartera_codigo FROM conceptos_cobro WHERE codigo = ?");
+            Db::Statement ctaStmt(db, "SELECT cuenta_cartera_codigo FROM conceptos_cobro WHERE codigo = ?");
             ctaStmt.bind(1, item.conceptoCodigo);
             ctaStmt.executeStep();
             std::string cuentaCartera = ctaStmt.getColumn(0).getString();
@@ -219,7 +219,7 @@ std::string CollectionEngine::registrarPago(const ReciboCajaRequest& req) {
         int comprobanteId = AccountingEngine::registrarComprobanteEnTransaccion(compReq);
 
         // 4. Insertar encabezado de Recibo de Caja
-        SQLite::Statement insertRC(db, R"(
+        Db::Statement insertRC(db, R"(
             INSERT INTO recibos_caja (
                 numero_recibo, unidad_id, tercero_id, fecha_pago, forma_pago,
                 cuenta_banco_codigo, referencia_bancaria, valor_total_pagado,
@@ -243,16 +243,16 @@ std::string CollectionEngine::registrarPago(const ReciboCajaRequest& req) {
         int reciboId = static_cast<int>(db.getLastInsertRowid());
 
         // 5. Actualizar saldos en cuentas_cobro_detalle y cuentas_cobro
-        SQLite::Statement insApl(db, R"(
+        Db::Statement insApl(db, R"(
             INSERT INTO recibos_caja_aplicacion (recibo_caja_id, cuenta_cobro_detalle_id, valor_aplicado)
             VALUES (?, ?, ?)
         )");
-        SQLite::Statement updDet(db, R"(
+        Db::Statement updDet(db, R"(
             UPDATE cuentas_cobro_detalle
             SET saldo_concepto = saldo_concepto - ?
             WHERE id = ?
         )");
-        SQLite::Statement updCC(db, R"(
+        Db::Statement updCC(db, R"(
             UPDATE cuentas_cobro
             SET saldo_pendiente = saldo_pendiente - ?,
                 estado = CASE
@@ -282,7 +282,7 @@ std::string CollectionEngine::registrarPago(const ReciboCajaRequest& req) {
         }
 
         transaction.commit();
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al registrar pago: " << e.what();
     }
 
@@ -294,7 +294,7 @@ std::vector<ReciboCajaResumen> CollectionEngine::listarRecibos() {
 
     try {
         auto& db = DatabaseManager::instance().getDb();
-        SQLite::Statement query(db, R"(
+        Db::Statement query(db, R"(
             SELECT
                 r.id, r.numero_recibo, r.fecha_pago, u.nomenclatura,
                 t.nombre_razon_social, r.forma_pago, COALESCE(r.referencia_bancaria, ''),
@@ -317,7 +317,7 @@ std::vector<ReciboCajaResumen> CollectionEngine::listarRecibos() {
                 query.getColumn(7).getInt64()
             });
         }
-    } catch (const SQLite::Exception& e) {
+    } catch (const Db::Exception& e) {
        qCritical() << "Error al listar recibos: " << e.what();
     }
 

@@ -73,7 +73,7 @@ void UsuariosAuditoriaWidget::setupUi() {
 
     m_cmbRol = new QComboBox(this);
     auto& db = DatabaseManager::instance().getDb();
-    SQLite::Statement rolQuery(db, "SELECT id, nombre FROM roles ORDER BY id ASC;");
+    Db::Statement rolQuery(db, "SELECT id, nombre FROM roles ORDER BY id ASC;");
     while (rolQuery.executeStep()) {
         m_cmbRol->addItem(
             QString::fromStdString(rolQuery.getColumn(1).getString()),

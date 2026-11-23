@@ -8,109 +8,172 @@ INSERT INTO roles (id, nombre, descripcion) VALUES
 (3, 'REVISOR_FISCAL', 'Consulta de auditoría, libros y estados financieros (solo lectura)'),
 (4, 'ASISTENTE', 'Facturación, cartera, residentes y reservas');
 
+INSERT INTO paginas_aplicacion (codigo, nombre, orden) VALUES
+('FACTURAS_SERVICIO', 'Facturas de servicios', 1),
+('UNIDADES', 'Unidades privadas', 2),
+('TERCEROS', 'Terceros', 3),
+('PARQUEADEROS', 'Parqueaderos y bodegas', 4),
+('FACTURACION', 'Cuentas de cobro', 5),
+('RECAUDO', 'Recaudo y paz y salvos', 6),
+('EGRESOS', 'Egresos y proveedores', 7),
+('PRESUPUESTO', 'Presupuesto', 8),
+('REPORTES', 'Reportes financieros', 9),
+('ASAMBLEAS', 'Asambleas y quórum', 10),
+('SEGURIDAD', 'Usuarios y auditoría', 11),
+('CONCEPTOS_COBRO', 'Conceptos de cobro', 12),
+('CONFIGURACION', 'Configuración', 13),
+('CUENTAS_CONTABLES', 'Cuentas contables', 14),
+('GESTION_PERMISOS', 'Permisos por perfil', 15)
+ON CONFLICT (codigo) DO NOTHING;
+
+INSERT INTO roles_permisos_pagina (rol_id, pagina_codigo, habilitado)
+SELECT r.id, p.codigo,
+    CASE
+        WHEN r.nombre = 'ADMIN' THEN 1
+        WHEN r.nombre = 'CONTADOR' THEN
+            CASE WHEN p.codigo = 'GESTION_PERMISOS' THEN 0 ELSE 1 END
+        WHEN r.nombre = 'REVISOR_FISCAL' THEN
+            CASE WHEN p.codigo IN (
+                'FACTURACION', 'RECAUDO', 'EGRESOS', 'CONFIGURACION',
+                'CONCEPTOS_COBRO', 'CUENTAS_CONTABLES', 'GESTION_PERMISOS'
+            ) THEN 0 ELSE 1 END
+        WHEN r.nombre = 'ASISTENTE' THEN
+            CASE WHEN p.codigo IN (
+                'EGRESOS', 'PRESUPUESTO', 'SEGURIDAD', 'CONFIGURACION',
+                'CONCEPTOS_COBRO', 'CUENTAS_CONTABLES', 'GESTION_PERMISOS'
+            ) THEN 0 ELSE 1 END
+        ELSE 0
+    END
+FROM roles r
+CROSS JOIN paginas_aplicacion p
+WHERE r.nombre <> 'SISTEMA'
+ON CONFLICT (rol_id, pagina_codigo) DO NOTHING;
+
 -- ============================================================================
 -- PLAN ÚNICO DE CUENTAS (PUC) - PROPIEDAD HORIZONTAL COLOMBIA (OT-15 CTCP)
 -- ============================================================================
 
 -- CLASE 1: ACTIVO
 INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
-('1',       'ACTIVO', 'ACTIVO', 'DEBITO', 1, NULL, 0, 0),
-('11',     'EFECTIVO Y EQUIVALENTES AL EFECTIVO', 'ACTIVO', 'DEBITO', 2, '1', 0, 0),
-('1105',   'CAJA', 'ACTIVO', 'DEBITO', 3, '11', 0, 0),
-('110505', 'CAJA GENERAL', 'ACTIVO', 'DEBITO', 4, '1105', 1, 1),
-('110510', 'CAJA MENOR', 'ACTIVO', 'DEBITO', 4, '1105', 1, 1),
-('1110',   'BANCOS', 'ACTIVO', 'DEBITO', 3, '11', 0, 0),
-('111005', 'CUENTA CORRIENTE PRINCIPAL', 'ACTIVO', 'DEBITO', 4, '1110', 1, 1),
-('1120',   'CUENTAS DE AHORRO', 'ACTIVO', 'DEBITO', 3, '11', 0, 0),
-('112005', 'CUENTA AHORROS OPERACIONES', 'ACTIVO', 'DEBITO', 4, '1120', 1, 1),
-('112010', 'CUENTA AHORROS FONDO DE Imprevistos (Ley 675)', 'ACTIVO', 'DEBITO', 4, '1120', 1, 1),
-
-('13',     'DEUDORES (CARTERA COPROPIETARIOS)', 'ACTIVO', 'DEBITO', 2, '1', 0, 0),
-('1305',   'CUOTAS DE ADMINISTRACIÓN POR COBRAR', 'ACTIVO', 'DEBITO', 3, '13', 0, 0),
-('130505', 'CUOTAS ORDINARIAS DE ADMINISTRACIÓN', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130510', 'CUOTAS EXTRAORDINARIAS', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130515', 'INTERESES DE MORA POR COBRAR', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130520', 'SANCIONES Y MULTAS POR COBRAR', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130525', 'ALQUILER SALÓN COMUNAL', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130530', 'ALQUILER PARQUEADEROS VISITANTES', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130535', 'ALQUILER BODEGAS / DEPOSITOS', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('130540', 'ALQUILER PARQUEADEROS COMUNES', 'ACTIVO', 'DEBITO', 4, '1305', 1, 1),
-('1399',   'DETERIORO DE CARTERA (PROVISIÓN)', 'ACTIVO', 'CREDITO', 3, '13', 0, 0),
-('139905', 'DETERIORO ACUMULADO CUOTAS ADMINISTRACIÓN', 'ACTIVO', 'CREDITO', 4, '1399', 1, 1);
+('1',       'ACTIVO',                                       'ACTIVO', 'DEBITO',  1,   NULL, 0, 0),
+('11',     'EFECTIVO Y EQUIVALENTES AL EFECTIVO',           'ACTIVO', 'DEBITO',  2,    '1', 0, 0),
+('1105',   'CAJA',                                          'ACTIVO', 'DEBITO',  3,   '11', 0, 0),
+('110505', 'CAJA GENERAL',                                  'ACTIVO', 'DEBITO',  4, '1105', 1, 1),
+('110510', 'CAJA MENOR',                                    'ACTIVO', 'DEBITO',  4, '1105', 1, 1),
+('1110',   'BANCOS',                                        'ACTIVO', 'DEBITO',  3,   '11', 0, 0),
+('111005', 'CUENTA CORRIENTE PRINCIPAL',                    'ACTIVO', 'DEBITO',  4, '1110', 1, 1),
+('1120',   'CUENTAS DE AHORRO',                             'ACTIVO', 'DEBITO',  3,   '11', 0, 0),
+('112005', 'CUENTA AHORROS OPERACIONES',                    'ACTIVO', 'DEBITO',  4, '1120', 1, 1),
+('112010', 'CUENTA AHORROS FONDO DE Imprevistos (Ley 675)', 'ACTIVO', 'DEBITO',  4, '1120', 1, 1),
+('13',     'DEUDORES (CARTERA COPROPIETARIOS)',             'ACTIVO', 'DEBITO',  2,    '1', 0, 0),
+('1305',   'CUOTAS DE ADMINISTRACIÓN POR COBRAR',           'ACTIVO', 'DEBITO',  3,   '13', 0, 0),
+('130505', 'CUOTAS ORDINARIAS DE ADMINISTRACIÓN',           'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130510', 'CUOTAS EXTRAORDINARIAS',                        'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130515', 'INTERESES DE MORA POR COBRAR',                  'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130520', 'SANCIONES Y MULTAS POR COBRAR',                 'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130525', 'ALQUILER SALÓN COMUNAL',                        'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130530', 'ALQUILER PARQUEADEROS VISITANTES',              'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130535', 'ALQUILER BODEGAS / DEPOSITOS',                  'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('130540', 'ALQUILER PARQUEADEROS COMUNES',                 'ACTIVO', 'DEBITO',  4, '1305', 1, 1),
+('1399',   'DETERIORO DE CARTERA (PROVISIÓN)',              'ACTIVO', 'CREDITO', 3,   '13', 0, 0),
+('139905', 'DETERIORO ACUMULADO CUOTAS ADMINISTRACIÓN',     'ACTIVO', 'CREDITO', 4, '1399', 1, 1);
 
 -- CLASE 2: PASIVO
 INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
-('2',       'PASIVO', 'PASIVO', 'CREDITO', 1, NULL, 0, 0),
-('23',     'CUENTAS POR PAGAR', 'PASIVO', 'CREDITO', 2, '2', 0, 0),
-('2335',   'COSTOS Y GASTOS POR PAGAR', 'PASIVO', 'CREDITO', 3, '23', 0, 0),
-('233505', 'HONORARIOS (CONTADOR / REVISOR / ADMINISTRADOR)', 'PASIVO', 'CREDITO', 4, '2335', 1, 1),
-('233510', 'SERVICIOS DE VIGILANCIA Y SEGURIDAD', 'PASIVO', 'CREDITO', 4, '2335', 1, 1),
-('233515', 'SERVICIOS DE ASEO Y JARDINERÍA', 'PASIVO', 'CREDITO', 4, '2335', 1, 1),
-('233520', 'MANTENIMIENTO Y REPARACIONES LOCATIVAS', 'PASIVO', 'CREDITO', 4, '2335', 1, 1),
-('233525', 'SERVICIOS PÚBLICOS POR PAGAR', 'PASIVO', 'CREDITO', 4, '2335', 1, 1),
-('2365',   'RETENCIÓN EN LA FUENTE POR PAGAR', 'PASIVO', 'CREDITO', 3, '23', 0, 0),
-('236515', 'RETEFUENTE HONORARIOS (10% / 11%)', 'PASIVO', 'CREDITO', 4, '2365', 1, 1),
-('236525', 'RETEFUENTE SERVICIOS (4% / 6%)', 'PASIVO', 'CREDITO', 4, '2365', 1, 1),
-('236540', 'RETEFUENTE COMPRAS (2.5% / 3.5%)', 'PASIVO', 'CREDITO', 4, '2365', 1, 1),
-('28',     'OTROS PASIVOS (ANTICIPOS)', 'PASIVO', 'CREDITO', 2, '2', 0, 0),
-('2805',   'ANTICIPOS Y AVANCES RECIBIDOS', 'PASIVO', 'CREDITO', 3, '28', 0, 0),
-('280505', 'CUOTAS PAGADAS POR ANTICIPADO COPROPIETARIOS', 'PASIVO', 'CREDITO', 4, '2805', 1, 1),
-('280510', 'DEPÓSITOS EN GARANTÍA SALÓN SOCIAL / Obras', 'PASIVO', 'CREDITO', 4, '2805', 1, 1);
+('2',       'PASIVO',                                           'PASIVO', 'CREDITO', 1,   NULL, 0, 0),
+('23',     'CUENTAS POR PAGAR',                                 'PASIVO', 'CREDITO', 2,    '2', 0, 0),
+('2335',   'COSTOS Y GASTOS POR PAGAR',                         'PASIVO', 'CREDITO', 3,   '23', 0, 0),
+('233505', 'HONORARIOS (CONTADOR / REVISOR / ADMINISTRADOR)',   'PASIVO', 'CREDITO', 4, '2335', 1, 1),
+('233510', 'SERVICIOS DE VIGILANCIA Y SEGURIDAD',               'PASIVO', 'CREDITO', 4, '2335', 1, 1),
+('233515', 'SERVICIOS DE ASEO Y JARDINERÍA',                    'PASIVO', 'CREDITO', 4, '2335', 1, 1),
+('233520', 'MANTENIMIENTO Y REPARACIONES LOCATIVAS',            'PASIVO', 'CREDITO', 4, '2335', 1, 1),
+('233525', 'SERVICIOS PÚBLICOS POR PAGAR',                      'PASIVO', 'CREDITO', 4, '2335', 1, 1),
+('2365',   'RETENCIÓN EN LA FUENTE POR PAGAR',                  'PASIVO', 'CREDITO', 3,   '23', 0, 0),
+('236515', 'RETEFUENTE HONORARIOS (10% / 11%)',                 'PASIVO', 'CREDITO', 4, '2365', 1, 1),
+('236525', 'RETEFUENTE SERVICIOS (4% / 6%)',                    'PASIVO', 'CREDITO', 4, '2365', 1, 1),
+('236540', 'RETEFUENTE COMPRAS (2.5% / 3.5%)',                  'PASIVO', 'CREDITO', 4, '2365', 1, 1),
+('28',     'OTROS PASIVOS (ANTICIPOS)',                         'PASIVO', 'CREDITO', 2,    '2', 0, 0),
+('2805',   'ANTICIPOS Y AVANCES RECIBIDOS',                     'PASIVO', 'CREDITO', 3,   '28', 0, 0),
+('280505', 'CUOTAS PAGADAS POR ANTICIPADO COPROPIETARIOS',      'PASIVO', 'CREDITO', 4, '2805', 1, 1),
+('280510', 'DEPÓSITOS EN GARANTÍA SALÓN SOCIAL / Obras',        'PASIVO', 'CREDITO', 4, '2805', 1, 1);
 
 -- CLASE 3: PATRIMONIO
 INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
-('3',       'PATRIMONIO', 'PATRIMONIO', 'CREDITO', 1, NULL, 0, 0),
-('31',     'FONDO SOCIAL / RESERVAS', 'PATRIMONIO', 'CREDITO', 2, '3', 0, 0),
-('3105',   'FONDO DE IMPREVISTOS (ART. 35 LEY 675)', 'PATRIMONIO', 'CREDITO', 3, '31', 0, 0),
-('310505', 'RESERVA FONDO DE IMPREVISTOS ACUMULADO', 'PATRIMONIO', 'CREDITO', 4, '3105', 1, 0),
-('36',     'RESULTADOS DEL EJERCICIO', 'PATRIMONIO', 'CREDITO', 2, '3', 0, 0),
-('3605',   'EXCEDENTES DEL EJERCICIO', 'PATRIMONIO', 'CREDITO', 3, '36', 0, 0),
-('360505', 'EXCEDENTES DEL PERIODO', 'PATRIMONIO', 'CREDITO', 4, '3605', 1, 0),
-('3610',   'DÉFICIT DEL EJERCICIO', 'PATRIMONIO', 'DEBITO', 3, '36', 0, 0),
-('361005', 'DÉFICIT DEL PERIODO', 'PATRIMONIO', 'DEBITO', 4, '3610', 1, 0);
+('3',       'PATRIMONIO',                               'PATRIMONIO', 'CREDITO', 1, NULL, 0, 0),
+('31',     'FONDO SOCIAL / RESERVAS',                   'PATRIMONIO', 'CREDITO', 2, '3', 0, 0),
+('3105',   'FONDO DE IMPREVISTOS (ART. 35 LEY 675)',    'PATRIMONIO', 'CREDITO', 3, '31', 0, 0),
+('310505', 'RESERVA FONDO DE IMPREVISTOS ACUMULADO',    'PATRIMONIO', 'CREDITO', 4, '3105', 1, 0),
+('36',     'RESULTADOS DEL EJERCICIO',                  'PATRIMONIO', 'CREDITO', 2, '3', 0, 0),
+('3605',   'EXCEDENTES DEL EJERCICIO',                  'PATRIMONIO', 'CREDITO', 3, '36', 0, 0),
+('360505', 'EXCEDENTES DEL PERIODO',                    'PATRIMONIO', 'CREDITO', 4, '3605', 1, 0),
+('3610',   'DÉFICIT DEL EJERCICIO',                     'PATRIMONIO', 'DEBITO', 3, '36', 0, 0),
+('361005', 'DÉFICIT DEL PERIODO',                       'PATRIMONIO', 'DEBITO', 4, '3610', 1, 0);
 
 -- CLASE 4: INGRESOS
 INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
-('4',       'INGRESOS', 'INGRESOS', 'CREDITO', 1, NULL, 0, 0),
-('41',     'INGRESOS OPERACIONALES COPROPIEDAD', 'INGRESOS', 'CREDITO', 2, '4', 0, 0),
-('4170',   'EXPENSAS COMUNES Y OTROS INGRESOS', 'INGRESOS', 'CREDITO', 3, '41', 0, 0),
-('417005', 'CUOTAS ORDINARIAS DE ADMINISTRACIÓN', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417010', 'CUOTAS EXTRAORDINARIAS', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417015', 'INTERESES DE MORA EXPENSAS COMUNES', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417020', 'MULTAS Y SANCIONES ASAMBLEA / CONSEJO', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417025', 'EXPLOTACIÓN SALÓN COMUNAL', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417030', 'EXPLOTACIÓN PARQUEADEROS VISITANTES', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417035', 'EXPLOTACIÓN BODEGAS / DEPOSITOS', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('417040', 'EXPLOTACIÓN PARQUEADEROS COMUNES', 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
-('42',     'INGRESOS NO OPERACIONALES', 'INGRESOS', 'CREDITO', 2, '4', 0, 0),
-('4210',   'FINANCIEROS', 'INGRESOS', 'CREDITO', 3, '42', 0, 0),
-('421005', 'RENDIMIENTOS FINANCIEROS CUENTAS AHORRO', 'INGRESOS', 'CREDITO', 4, '4210', 1, 1);
+('4',      'INGRESOS',                                              'INGRESOS', 'CREDITO', 1, NULL, 0, 0),
+('41',     'INGRESOS OPERACIONALES COPROPIEDAD',                    'INGRESOS', 'CREDITO', 2, '4', 0, 0),
+('4170',   'EXPENSAS COMUNES Y OTROS INGRESOS',                     'INGRESOS', 'CREDITO', 3, '41', 0, 0),
+('417005', 'CUOTAS ORDINARIAS DE ADMINISTRACIÓN',                   'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417010', 'CUOTAS EXTRAORDINARIAS',                                'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417015', 'INTERESES DE MORA EXPENSAS COMUNES',                    'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417020', 'MULTAS Y SANCIONES ASAMBLEA / CONSEJO',                 'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417025', 'EXPLOTACIÓN SALÓN COMUNAL',                             'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417030', 'EXPLOTACIÓN PARQUEADEROS VISITANTES',                   'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417035', 'EXPLOTACIÓN BODEGAS / DEPOSITOS',                       'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('417040', 'EXPLOTACIÓN PARQUEADEROS COMUNES',                      'INGRESOS', 'CREDITO', 4, '4170', 1, 1),
+('42',     'INGRESOS NO OPERACIONALES',                             'INGRESOS', 'CREDITO', 2, '4', 0, 0),
+('4210',   'FINANCIEROS',                                           'INGRESOS', 'CREDITO', 3, '42', 0, 0),
+('421005', 'RENDIMIENTOS FINANCIEROS CUENTAS AHORRO',               'INGRESOS', 'CREDITO', 4, '4210', 1, 1);
 
 -- CLASE 5: GASTOS
 INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
-('5',       'GASTOS', 'GASTOS', 'DEBITO', 1, NULL, 0, 0),
-('51',     'GASTOS DE ADMINISTRACIÓN Y OPERACIÓN', 'GASTOS', 'DEBITO', 2, '5', 0, 0),
-('5110',   'HONORARIOS', 'GASTOS', 'DEBITO', 3, '51', 0, 0),
-('511005', 'HONORARIOS ADMINISTRACIÓN', 'GASTOS', 'DEBITO', 4, '5110', 1, 1),
-('511010', 'HONORARIOS CONTABILIDAD', 'GASTOS', 'DEBITO', 4, '5110', 1, 1),
-('511015', 'HONORARIOS REVISORÍA FISCAL', 'GASTOS', 'DEBITO', 4, '5110', 1, 1),
-('511020', 'HONORARIOS SG-SST', 'GASTOS', 'DEBITO', 4, '5110', 1, 1),
-('5130',   'SEGUROS (ART. 15 LEY 675)', 'GASTOS', 'DEBITO', 3, '51', 0, 0),
+('5',      'GASTOS',                                                'GASTOS', 'DEBITO', 1, NULL, 0, 0),
+('51',     'GASTOS DE ADMINISTRACIÓN Y OPERACIÓN',                  'GASTOS', 'DEBITO', 2, '5', 0, 0),
+('5110',   'HONORARIOS',                                            'GASTOS', 'DEBITO', 3, '51', 0, 0),
+('511005', 'HONORARIOS ADMINISTRACIÓN',                             'GASTOS', 'DEBITO', 4, '5110', 1, 1),
+('511010', 'HONORARIOS CONTABILIDAD',                               'GASTOS', 'DEBITO', 4, '5110', 1, 1),
+('511015', 'HONORARIOS REVISORÍA FISCAL',                           'GASTOS', 'DEBITO', 4, '5110', 1, 1),
+('511020', 'HONORARIOS SG-SST',                                     'GASTOS', 'DEBITO', 4, '5110', 1, 1),
+('5130',   'SEGUROS (ART. 15 LEY 675)',                             'GASTOS', 'DEBITO', 3, '51', 0, 0),
 ('513005', 'PÓLIZA OBLIGATORIA ÁREAS COMUNES (INCENDIO/TERREMOTO)', 'GASTOS', 'DEBITO', 4, '5130', 1, 1),
-('5135',   'SERVICIOS CONTRATADOS', 'GASTOS', 'DEBITO', 3, '51', 0, 0),
-('513505', 'SERVICIOS DE VIGILANCIA Y SEGURIDAD PRIVADA', 'GASTOS', 'DEBITO', 4, '5135', 1, 1),
-('513510', 'SERVICIOS DE ASEO, CAFETERÍA Y JARDINERÍA', 'GASTOS', 'DEBITO', 4, '5135', 1, 1),
-('513525', 'ACUEDUCTO Y ALCANTARILLADO ÁREAS COMUNES', 'GASTOS', 'DEBITO', 4, '5135', 1, 1),
-('513530', 'ENERGÍA ELÉCTRICA ÁREAS COMUNES', 'GASTOS', 'DEBITO', 4, '5135', 1, 1),
-('513535', 'SERVICIO DE TELÉFONO E INTERNET ADMINISTRACIÓN', 'GASTOS', 'DEBITO', 4, '5135', 1, 1),
-('5145',   'MANTENIMIENTO Y REPARACIONES', 'GASTOS', 'DEBITO', 3, '51', 0, 0),
-('514505', 'MANTENIMIENTO ASCENSORES Y ESCALERAS', 'GASTOS', 'DEBITO', 4, '5145', 1, 1),
-('514510', 'MANTENIMIENTO MOTOBOMBAS, TANQUES Y PLANTAS', 'GASTOS', 'DEBITO', 4, '5145', 1, 1),
-('514515', 'REPARACIONES LOCATIVAS ZONAS COMUNES', 'GASTOS', 'DEBITO', 4, '5145', 1, 1),
-('53',     'GASTOS NO OPERACIONALES', 'GASTOS', 'DEBITO', 2, '5', 0, 0),
-('5305',   'FINANCIEROS', 'GASTOS', 'DEBITO', 3, '53', 0, 0),
-('530505', 'COMISIONES BANCARIAS Y GMF (4x1000)', 'GASTOS', 'DEBITO', 4, '5305', 1, 1),
-('530535', 'DESCUENTOS COMERCIALES CONDICIONADOS (PRONTO PAGO)', 'GASTOS', 'DEBITO', 4, '5305', 1, 1);
+('5135',   'SERVICIOS CONTRATADOS',                                 'GASTOS', 'DEBITO', 3, '51', 0, 0),
+('513505', 'SERVICIOS DE VIGILANCIA Y SEGURIDAD PRIVADA',           'GASTOS', 'DEBITO', 4, '5135', 1, 1),
+('513510', 'SERVICIOS DE ASEO, CAFETERÍA Y JARDINERÍA',             'GASTOS', 'DEBITO', 4, '5135', 1, 1),
+('513525', 'ACUEDUCTO Y ALCANTARILLADO ÁREAS COMUNES',              'GASTOS', 'DEBITO', 4, '5135', 1, 1),
+('513530', 'ENERGÍA ELÉCTRICA ÁREAS COMUNES',                       'GASTOS', 'DEBITO', 4, '5135', 1, 1),
+('513535', 'SERVICIO DE TELÉFONO E INTERNET ADMINISTRACIÓN',        'GASTOS', 'DEBITO', 4, '5135', 1, 1),
+('5145',   'MANTENIMIENTO Y REPARACIONES',                          'GASTOS', 'DEBITO', 3, '51', 0, 0),
+('514505', 'MANTENIMIENTO ASCENSORES Y ESCALERAS',                  'GASTOS', 'DEBITO', 4, '5145', 1, 1),
+('514510', 'MANTENIMIENTO MOTOBOMBAS, TANQUES Y PLANTAS',           'GASTOS', 'DEBITO', 4, '5145', 1, 1),
+('514515', 'REPARACIONES LOCATIVAS ZONAS COMUNES',                  'GASTOS', 'DEBITO', 4, '5145', 1, 1),
+('53',     'GASTOS NO OPERACIONALES',                               'GASTOS', 'DEBITO', 2, '5', 0, 0),
+('5305',   'FINANCIEROS',                                           'GASTOS', 'DEBITO', 3, '53', 0, 0),
+('530505', 'COMISIONES BANCARIAS Y GMF (4x1000)',                   'GASTOS', 'DEBITO', 4, '5305', 1, 1),
+('530535', 'DESCUENTOS COMERCIALES CONDICIONADOS (PRONTO PAGO)',    'GASTOS', 'DEBITO', 4, '5305', 1, 1);
+
+-- CLASE 8: CUENTAS DE ORDEN DEUDORAS
+INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
+('8',      'CUENTAS DE ORDEN DEUDORAS',                                       'ORDEN', 'DEBITO', 1,   NULL, 0, 0),
+('81',     'DERECHOS CONTINGENTES',                                           'ORDEN', 'DEBITO', 2,    '8', 0, 0),
+('8105',   'BIENES Y VALORES RECIBIDOS EN GARANTÍA',                          'ORDEN', 'DEBITO', 3,   '81', 0, 0),
+('810505', 'BIENES Y VALORES RECIBIDOS EN GARANTÍA A TERCEROS',               'ORDEN', 'DEBITO', 4, '8105', 1, 1),
+('810510', 'BIENES Y VALORES RECIBIDOS EN GARANTÍA A LA ADMINISTRACIÓN',      'ORDEN', 'DEBITO', 4, '8105', 1, 0),
+('83',     'CONTROL PRESUPUESTAL',                                            'ORDEN', 'DEBITO', 2,    '8', 0, 0),
+('8305',   'PRESUPUESTO DE INGRESOS APROBADO',                                'ORDEN', 'DEBITO', 3,   '83', 1, 1),
+('830505', 'BIENES Y VALORES ENTREGADOS EN GARANTÍA A LA ADMINISTRACIÓN',     'ORDEN', 'DEBITO', 4, '8305', 1, 1),
+('8310',   'PRESUPUESTO DE GASTOS APROBADO',                                  'ORDEN', 'DEBITO', 3,   '83', 0, 0),
+('831005', 'BIENES Y VALORES EN PODER DE TERCEROS (arrendamiento, depósito)', 'ORDEN', 'DEBITO', 4, '8310', 1, 1);
+
+
+-- CLASE 9: CUENTAS DE ORDEN ACREEDORAS
+INSERT INTO puc_cuentas (codigo, nombre, clase, naturaleza, nivel, cuenta_padre, permite_movimiento, exige_tercero) VALUES
+('9',      'CUENTAS DE ORDEN ACREEDORAS',             'ORDEN', 'CREDITO', 1, NULL, 0, 0),
+('91',     'Responsabilidades contingentes',          'ORDEN', 'CREDITO', 2,  '9', 0, 0),
+('9105',   'BIENES Y VALORES ENTREGADOS EN GARANTÍA', 'ORDEN', 'CREDITO', 3, '91', 0, 0),
+('93',   'Contrapartidas de control presupuestal',    'ORDEN', 'CREDITO', 2,  '9', 0, 0),
+('9305',   'Contrapartida presupuesto de ingresos',   'ORDEN', 'CREDITO', 3, '93', 0, 0),
+('9310',   'Contrapartida presupuesto de gastos',     'ORDEN', 'CREDITO', 3, '93', 0, 0);
 
 -- ============================================================================
 -- CONCEPTOS DE COBRO PREDEFINIDOS
@@ -268,3 +331,21 @@ INSERT INTO tasas_mora_historial (id, periodo, tasa_efectiva_anual, tasa_mensual
 (126, '2026-09', 0.1949, 0.0216,  '1260', 0),
 (127, '2026-10', 0.1906, 0.02118, '1472', 0),
 (128, '2026-11', 0.1889, 0.02101, '1707', 0);
+
+SELECT setval(
+    pg_get_serial_sequence('roles', 'id'),
+    GREATEST(COALESCE(MAX(id), 1), 1),
+    COALESCE(MAX(id), 0) >= 1
+) FROM roles;
+
+SELECT setval(
+    pg_get_serial_sequence('usuarios', 'id'),
+    GREATEST(COALESCE(MAX(id), 1), 1),
+    COALESCE(MAX(id), 0) >= 1
+) FROM usuarios;
+
+SELECT setval(
+    pg_get_serial_sequence('tasas_mora_historial', 'id'),
+    GREATEST(COALESCE(MAX(id), 1), 1),
+    COALESCE(MAX(id), 0) >= 1
+) FROM tasas_mora_historial;
